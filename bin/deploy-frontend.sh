@@ -5,7 +5,7 @@
 set -e
 
 STACK_NAME="ChaseEmailStack"
-REGION="${AWS_DEFAULT_REGION:-us-east-1}"
+REGION="${AWS_DEFAULT_REGION:-us-west-2}"
 
 echo "Fetching CDK stack outputs from $STACK_NAME..."
 
