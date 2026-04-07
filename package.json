@@ -1,0 +1,56 @@
+{
+  "name": "private-mail-server",
+  "version": "0.1.0",
+  "bin": {
+    "chase-email": "bin/chase-email.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "test": "jest",
+    "cdk": "cdk",
+    "deploy:backend": "bash -c '[ -n \"$DOMAIN_NAME\" ] || (echo \"Error: DOMAIN_NAME env var is required. Example: DOMAIN_NAME=yourdomain.com npm run deploy:backend\" && exit 1); cdk deploy --context domainName=$DOMAIN_NAME --require-approval never'",
+    "deploy:frontend": "bash bin/deploy-frontend.sh",
+    "deploy": "npm run deploy:backend && npm run deploy:frontend"
+  },
+  "devDependencies": {
+    "@aws-sdk/client-cognito-identity-provider": "^3.1000.0",
+    "@aws-sdk/client-dynamodb": "^3.1000.0",
+    "@aws-sdk/client-lambda": "^3.1004.0",
+    "@aws-sdk/client-s3": "^3.1000.0",
+    "@aws-sdk/client-ses": "^3.1000.0",
+    "@aws-sdk/client-sns": "^3.1000.0",
+    "@aws-sdk/client-sqs": "^3.1000.0",
+    "@aws-sdk/client-ssm": "^3.1000.0",
+    "@aws-sdk/lib-storage": "^3.1001.0",
+    "@aws-sdk/s3-request-presigner": "^3.1000.0",
+    "@aws-sdk/util-dynamodb": "^3.996.1",
+    "@types/aws-lambda": "^8.10.161",
+    "@types/imap-simple": "^4.2.10",
+    "@types/jest": "^30",
+    "@types/mailparser": "^3.4.6",
+    "@types/node": "^24.10.1",
+    "@types/node-forge": "^1.3.14",
+    "@types/unzipper": "^0.10.11",
+    "@types/web-push": "^3.6.4",
+    "aws-cdk": "2.1108.0",
+    "esbuild": "^0.25.0",
+    "jest": "^30",
+    "ts-jest": "^29",
+    "ts-node": "^10.9.2",
+    "typescript": "~5.9.3"
+  },
+  "dependencies": {
+    "@aws-sdk/lib-dynamodb": "^3.1004.0",
+    "@smithy/node-http-handler": "^4.4.14",
+    "@tanstack/react-virtual": "^3.13.19",
+    "aws-cdk-lib": "^2.240.0",
+    "constructs": "^10.5.0",
+    "imap-simple": "^5.1.0",
+    "mailparser": "^3.9.4",
+    "node-forge": "^1.3.1",
+    "ulid": "^2.3.0",
+    "unzipper": "^0.12.3",
+    "web-push": "^3.6.7"
+  }
+}

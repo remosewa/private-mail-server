@@ -1,0 +1,19 @@
+*.js
+!jest.config.js
+*.d.ts
+node_modules
+
+# CDK asset staging directory
+.cdk.staging
+cdk.out
+
+# Environment files — contain secrets, never commit
+web-client/.env
+web-client/.env.local
+web-client/.env.*.local
+
+# Personal/IDE config
+.kiro/
+.vscode/
+web-client/tsconfig.*.tsbuildinfo
+web-client/dist/
