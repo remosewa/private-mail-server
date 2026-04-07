@@ -61,6 +61,34 @@ export class SyncManager {
   }
 
   /**
+   * Force a sync starting from the given date, filling in any emails that
+   * may have been missed. Does not delete any local data.
+   */
+  async syncFrom(fromDate: Date): Promise<void> {
+    if (SyncManager.syncing) {
+      console.warn('[SyncManager] Sync already in progress');
+      return;
+    }
+    SyncManager.syncing = true;
+    try {
+      const db = await getDb();
+      const existingCount = ((await db.selectValue('SELECT COUNT(*) FROM email_metadata')) as number) ?? 0;
+      useSyncStore.getState().setProgress({ syncing: true, synced: existingCount, total: existingCount });
+      // Roll cursor back and skip the early-exit optimisation so we page through
+      // everything in the window even if some emails are already present locally.
+      // Clear localStorage cursor so syncHead uses our rolled-back date, not the stored one.
+      localStorage.removeItem('sync_cursor');
+      this.cachedLatestTimestamp = fromDate.toISOString();
+      await this.syncHead(true);
+      // Reset so next regular sync re-reads from the newly written sync_cursor.
+      this.cachedLatestTimestamp = undefined;
+    } finally {
+      SyncManager.syncing = false;
+      useSyncStore.getState().setProgress({ syncing: false });
+    }
+  }
+
+  /**
    * Fire a cheap DB query to wake the OPFS worker so subsequent sync operations don't pay cold-start latency.
    */
   async warmup(): Promise<void> {
@@ -135,7 +163,7 @@ export class SyncManager {
      * 
      * Uses lastUpdatedAt > max(local) - 30s to get the most recent changes.
      */
-  async syncHead(): Promise<number> {
+  async syncHead(skipEarlyExit = false): Promise<number> {
     const db = await getDb();
     // console.log('[SyncManager] syncHead: getDb', Math.round(performance.now() - t0), 'ms');
 
@@ -143,9 +171,14 @@ export class SyncManager {
     await this.refreshFilters();
     //console.log('[SyncManager] syncHead: refreshFilters done', Math.round(performance.now() - t0), 'ms');
 
-    // Get the most recent lastUpdatedAt — use cached value if available to avoid OPFS round-trip
+    // Get the most recent lastUpdatedAt — prefer syncCursor (survives refresh) over in-memory cache
+    const storedCursor = localStorage.getItem('sync_cursor');
+    const usingSyncCursor = storedCursor !== null;
     let latestTimestamp: string | null;
-    if (this.cachedLatestTimestamp === undefined) {
+    if (usingSyncCursor) {
+      latestTimestamp = storedCursor;
+      this.cachedLatestTimestamp = storedCursor;
+    } else if (this.cachedLatestTimestamp === undefined) {
       latestTimestamp = await db.selectValue(
         'SELECT MAX(lastUpdatedAt) FROM email_metadata'
       ) as string | null;
@@ -170,6 +203,8 @@ export class SyncManager {
 
     let synced = 0;
     let nextToken: string | undefined;
+    // Track max timestamp seen across all pages — only commit after loop completes (prevents gap on refresh)
+    let newMaxTimestamp: string | null = usingSyncCursor ? storedCursor : (this.cachedLatestTimestamp ?? null);
 
     do {
       const response = await getUpdates(sinceTimestamp, nextToken);
@@ -207,7 +242,7 @@ export class SyncManager {
         });
 
         // Fix 1: Break BEFORE expensive processing
-        if (allEmailsAlreadyPresent) {
+        if (allEmailsAlreadyPresent && !skipEarlyExit) {
           // console.log('[SyncManager] All emails in page already present with current versions, stopping pagination');
           break;
         }
@@ -219,10 +254,10 @@ export class SyncManager {
       synced += processed;
       runningCount += processed;
 
-      // Update cached timestamp from this batch
+      // Track max timestamp across all pages — only commit after loop completes
       for (const email of response.emails) {
-        if (email.lastUpdatedAt && (!this.cachedLatestTimestamp || email.lastUpdatedAt > this.cachedLatestTimestamp)) {
-          this.cachedLatestTimestamp = email.lastUpdatedAt;
+        if (email.lastUpdatedAt && (!newMaxTimestamp || email.lastUpdatedAt > newMaxTimestamp)) {
+          newMaxTimestamp = email.lastUpdatedAt;
         }
       }
 
@@ -244,6 +279,12 @@ export class SyncManager {
 
       nextToken = response.nextToken ?? undefined;
     } while (nextToken);
+
+    // Commit the max timestamp seen — safe to advance cursor now that all pages completed
+    if (newMaxTimestamp) {
+      this.cachedLatestTimestamp = newMaxTimestamp;
+      localStorage.setItem('sync_cursor', newMaxTimestamp);
+    }
 
     // Final count update using running count
     useSyncStore.getState().setProgress({

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useAuthStore } from '../../store/authStore';
 import { apiClient } from '../../api/client';
 import { useSyncStore } from '../../store/syncStore';
+import { SyncManager } from '../../sync/SyncManager';
 
 interface MigrationStatus {
   state: 'idle' | 'uploading' | 'extracting' | 'running' | 'completed' | 'failed';
@@ -29,9 +30,30 @@ export default function MboxMigration() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pollIntervalRef = useRef<number | null>(null);
 
-  const handleForceResync = () => {
-    // Trigger a page reload to start a full sync
-    window.location.reload();
+  const [resyncDialogOpen, setResyncDialogOpen] = useState(false);
+  const [resyncing, setResyncing] = useState(false);
+
+  const RESYNC_OPTIONS = [
+    { label: 'Last 1 day',   days: 1 },
+    { label: 'Last 7 days',  days: 7 },
+    { label: 'Last 30 days', days: 30 },
+    { label: 'Last year',    days: 365 },
+    { label: 'All time',     days: null },
+  ];
+
+  const handleForceResync = async (days: number | null) => {
+    setResyncDialogOpen(false);
+    setResyncing(true);
+    try {
+      const fromDate = days === null
+        ? new Date(0)
+        : new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+      const { privateKey } = useAuthStore.getState();
+      if (!privateKey) return;
+      await SyncManager.getInstance(privateKey).syncFrom(fromDate);
+    } finally {
+      setResyncing(false);
+    }
   };
 
   // Poll migration status
@@ -488,17 +510,45 @@ export default function MboxMigration() {
       <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
         <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">Force Re-sync</h3>
         <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-          Re-download all emails from the server, starting from the beginning. 
-          Useful after a migration or if you suspect missing emails or want to refresh your local database.
+          Re-fetch emails from the server for a chosen time window. Fills in any emails that may have been missed without deleting existing data.
         </p>
         <button
-          onClick={handleForceResync}
-          disabled={syncing}
+          onClick={() => setResyncDialogOpen(true)}
+          disabled={syncing || resyncing}
           className="mt-2 px-3 py-1.5 text-sm font-medium bg-amber-600 hover:bg-amber-700 disabled:bg-amber-300 text-white rounded-lg transition-colors"
         >
-          {syncing ? 'Sync in progress...' : 'Force Re-sync All Emails'}
+          {resyncing ? 'Syncing...' : syncing ? 'Sync in progress...' : 'Force Re-sync Emails'}
         </button>
       </div>
+
+      {/* Re-sync dialog */}
+      {resyncDialogOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white dark:bg-gray-900 rounded-xl shadow-lg p-6 w-80 space-y-3">
+            <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">Re-sync from when?</h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400">Emails already stored locally are kept. Missing emails in the selected window will be downloaded.</p>
+            <div className="flex flex-col gap-2">
+              {RESYNC_OPTIONS.map(opt => (
+                <button
+                  key={opt.label}
+                  onClick={() => handleForceResync(opt.days)}
+                  className="px-4 py-2 text-sm font-medium text-left rounded-lg
+                             bg-gray-100 hover:bg-amber-100 dark:bg-gray-800 dark:hover:bg-amber-900/30
+                             text-gray-800 dark:text-gray-200 transition-colors"
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setResyncDialogOpen(false)}
+              className="w-full mt-1 px-4 py-2 text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
