@@ -4,6 +4,10 @@
 
 set -e
 
+# Resolve the repo root regardless of where the script is invoked from
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+
 STACK_NAME="ChaseEmailStack"
 REGION="${AWS_DEFAULT_REGION:-us-west-2}"
 
@@ -33,10 +37,10 @@ if [ -z "$DISTRIBUTION" ] || [ "$DISTRIBUTION" = "None" ]; then
 fi
 
 echo "Building web client..."
-cd web-client && npm run build && cd ..
+cd "$REPO_ROOT/web-client" && npm run build && cd "$REPO_ROOT"
 
 echo "Syncing to s3://$BUCKET..."
-aws s3 sync web-client/dist/ "s3://$BUCKET" --delete
+aws s3 sync "$REPO_ROOT/web-client/dist/" "s3://$BUCKET" --delete
 
 echo "Invalidating CloudFront distribution $DISTRIBUTION..."
 aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION" --paths '/*'

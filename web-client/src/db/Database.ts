@@ -598,6 +598,11 @@ async function initDbInner(): Promise<SqliteDb> {
     await db.exec('PRAGMA user_version = 15');
   }
 
+  if (version < 16) {
+    try { await db.exec('ALTER TABLE email_metadata ADD COLUMN attachmentFilenames TEXT'); } catch { /* already exists */ }
+    await db.exec('PRAGMA user_version = 16');
+  }
+
   return db;
 }
 

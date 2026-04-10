@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { useUiStore } from '../../store/uiStore';
 import { useAuthStore } from '../../store/authStore';
@@ -12,6 +12,18 @@ import ThreadNavigator from './ThreadNavigator';
 export default function ThreadPane() {
   const { selectedEmailUlid, selectedFolderId } = useUiStore();
   const { privateKey } = useAuthStore();
+  const queryClient = useQueryClient();
+
+  // After a sync completes, refetch the selected email's body/header in case it just arrived
+  useEffect(() => {
+    const handler = () => {
+      if (selectedEmailUlid) {
+        void queryClient.invalidateQueries({ queryKey: ['email-body', selectedEmailUlid] });
+      }
+    };
+    window.addEventListener('search-refresh-requested', handler);
+    return () => window.removeEventListener('search-refresh-requested', handler);
+  }, [selectedEmailUlid, queryClient]);
 
   // Get threadId from local DB for navigator (fast, no decryption needed)
   const { data: threadData } = useQuery({
@@ -42,6 +54,7 @@ export default function ThreadPane() {
         [selectedEmailUlid],
       );
       const row = rows[0];
+      const headerPending = !row; // email not yet in local DB (sync still in progress)
       const threadId = (row?.['threadId'] as string) ?? selectedEmailUlid;
       const wrappedEmailKey = (row?.['wrappedEmailKey'] as string | null) ?? null;
       const header = {
@@ -109,7 +122,7 @@ export default function ThreadPane() {
         cidEntries.filter((e): e is [string, string] => e !== null),
       );
 
-      return { header, body, attachments, cidMap, wrappedEmailKey, threadId };
+      return { header, body, attachments, cidMap, wrappedEmailKey, threadId, headerPending };
     },
   });
 
@@ -166,6 +179,7 @@ export default function ThreadPane() {
             emailUlid={selectedEmailUlid}
             privateKey={privateKey!}
             wrappedEmailKey={data.wrappedEmailKey}
+            headerPending={data.headerPending}
           />
         )}
       </div>

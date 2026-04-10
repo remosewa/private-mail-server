@@ -705,13 +705,14 @@ export class SyncManager {
            (ulid, threadId, folderId, labelIds, receivedAt, receivedMs, isRead,
             s3BodyKey, s3TextKey, s3EmbeddingKey, s3AttachmentsKey,
             subject, fromName, fromAddress, preview, toAddresses, ccAddresses, bccAddresses,
-            wrappedEmailKey, listUnsubscribe, listUnsubscribePost, lastUpdatedAt, version, messageId, hasAttachments)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            wrappedEmailKey, listUnsubscribe, listUnsubscribePost, lastUpdatedAt, version, messageId, hasAttachments, attachmentFilenames)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
          ON CONFLICT(ulid) DO UPDATE SET
            folderId=excluded.folderId, labelIds=excluded.labelIds,
            isRead=excluded.isRead, wrappedEmailKey=excluded.wrappedEmailKey,
            s3EmbeddingKey=COALESCE(excluded.s3EmbeddingKey, email_metadata.s3EmbeddingKey),
-           lastUpdatedAt=excluded.lastUpdatedAt, version=excluded.version, messageId=excluded.messageId, hasAttachments=excluded.hasAttachments
+           lastUpdatedAt=excluded.lastUpdatedAt, version=excluded.version, messageId=excluded.messageId, hasAttachments=excluded.hasAttachments,
+           attachmentFilenames=COALESCE(excluded.attachmentFilenames, email_metadata.attachmentFilenames)
          WHERE excluded.lastUpdatedAt > email_metadata.lastUpdatedAt`,
       {
         bind: [
@@ -731,6 +732,7 @@ export class SyncManager {
           meta.version ?? 1,
           meta.messageId ?? null,
           meta.hasAttachments ?? 0,
+          meta.attachmentFilenames ?? null,
         ],
       },
     );

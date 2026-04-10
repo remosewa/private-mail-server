@@ -170,9 +170,13 @@ export default function ThreadRow({ item, isChecked, selectionActive, onToggleSe
           </div>
           <span className="text-xs text-gray-400 shrink-0 dark:text-gray-500">{relativeTime(displayInfo.receivedAt)}</span>
         </div>
-        <div className={`text-sm truncate mt-0.5 ${isUnread ? 'text-gray-800 dark:text-gray-200' : 'text-gray-600 dark:text-gray-400'
-          }`}>
-          {displayInfo.subject || '(no subject)'}
+        <div className={`flex items-center gap-1.5 mt-0.5 ${isUnread ? 'text-gray-800 dark:text-gray-200' : 'text-gray-600 dark:text-gray-400'}`}>
+          <span className="text-sm truncate">{displayInfo.subject || '(no subject)'}</span>
+          {displayInfo.attachmentFilenames.length > 0 && (
+            <svg className="shrink-0 w-3.5 h-3.5 text-gray-400 dark:text-gray-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
+            </svg>
+          )}
         </div>
         {emailLabels.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-1.5">

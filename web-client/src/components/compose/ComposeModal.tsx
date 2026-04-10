@@ -19,7 +19,7 @@ import { useUiStore } from '../../store/uiStore';
 import { useAuthStore } from '../../store/authStore';
 import { useSettingsStore } from '../../store/settingsStore';
 import {
-  sendEmail, saveDraft, deleteDraft, getEmailBody, getEmailAttachments,
+  sendEmail, saveDraft, deleteDraft, getEmailBody, getEmailAttachments, getAttachmentBlob,
   getAttachmentUploadUrl, uploadEncryptedAttachment, deleteAttachment,
 } from '../../api/emails';
 import { remoteLogger } from '../../api/logger';
@@ -511,6 +511,80 @@ export default function ComposePane() {
       }
     })();
   }, [editor]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Load attachments from the source email when forwarding
+  const forwardAttachmentsLoadedRef = useRef(false);
+  useEffect(() => {
+    const srcUlid = replyContext?.forwardEmailUlid;
+    if (!srcUlid || forwardAttachmentsLoadedRef.current || !privateKey) return;
+    forwardAttachmentsLoadedRef.current = true;
+
+    void (async () => {
+      // Wait for the compose emailKey to be ready
+      let attempts = 0;
+      while (!emailKeyRef.current && attempts < 100) {
+        await new Promise(r => setTimeout(r, 20));
+        attempts++;
+      }
+      if (!emailKeyRef.current) return;
+
+      try {
+        const db = await getDb();
+        const rows = await db.selectObjects(
+          'SELECT wrappedEmailKey FROM email_metadata WHERE ulid = ?', [srcUlid],
+        );
+        const srcWrappedKey = (rows[0]?.['wrappedEmailKey'] as string | null) ?? null;
+        const srcEmailKey = srcWrappedKey ? await unwrapEmailKey(srcWrappedKey, privateKey) : null;
+
+        const attBuf = await getEmailAttachments(srcUlid);
+        const attPlain = srcEmailKey
+          ? new Uint8Array(await decryptAttachment(attBuf, srcEmailKey))
+          : await decryptBlob(attBuf, privateKey);
+        const attMeta = decodeJson<Array<{ filename: string; size: number; contentType: string; attachmentId: string; contentId?: string }>>(attPlain);
+
+        const toForward = attMeta.filter(a => !a.contentId);
+        if (toForward.length === 0) return;
+
+        const entries: AttachmentEntry[] = toForward.map(a => ({
+          id: `fwd-${a.attachmentId}`,
+          name: a.filename,
+          size: a.size,
+          type: a.contentType,
+          attachmentId: null,
+          status: 'uploading' as const,
+          progress: 0,
+        }));
+        setAttachments(prev => [...prev, ...entries]);
+
+        for (let i = 0; i < toForward.length; i++) {
+          const att = toForward[i]!;
+          const entry = entries[i]!;
+          try {
+            const encBuf = await getAttachmentBlob(srcUlid, att.attachmentId);
+            const bytes = srcEmailKey
+              ? new Uint8Array(await decryptAttachment(encBuf, srcEmailKey))
+              : await decryptBlob(encBuf, privateKey);
+            const reEncrypted = await encryptAttachment(bytes.buffer as ArrayBuffer, emailKeyRef.current!);
+            const { attachmentId, uploadUrl } = await getAttachmentUploadUrl({
+              emailId: composeEmailIdRef.current,
+              filename: att.filename,
+              contentType: att.contentType,
+              size: att.size,
+            });
+            await uploadEncryptedAttachment(uploadUrl, reEncrypted, (pct) => {
+              setAttachments(prev => prev.map(a => a.id === entry.id ? { ...a, progress: pct } : a));
+            });
+            setAttachments(prev => prev.map(a =>
+              a.id === entry.id ? { ...a, attachmentId, status: 'ready', progress: 100 } : a,
+            ));
+          } catch {
+            setAttachments(prev => prev.map(a => a.id === entry.id ? { ...a, status: 'failed' } : a));
+          }
+        }
+        isDirtyRef.current = true;
+      } catch { /* failed to load forward attachments — not fatal */ }
+    })();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function insertLink() {
     const url = window.prompt('Enter URL:');

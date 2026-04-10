@@ -224,13 +224,13 @@ export default function InboxPane() {
       const db = await getDb();
       if (selectedFolderId === 'ALL') {
         return await db.selectObjects(
-          `SELECT ulid, threadId, subject, fromName, fromAddress, preview, receivedAt, isRead, labelIds, s3AttachmentsKey, hasAttachments
+          `SELECT ulid, threadId, subject, fromName, fromAddress, preview, receivedAt, isRead, labelIds, s3AttachmentsKey, hasAttachments, attachmentFilenames
            FROM email_metadata WHERE folderId NOT IN ('TRASH','SPAM','DRAFTS') ORDER BY receivedMs DESC`,
           [],
         ) as unknown as LocalEmail[];
       }
       return await db.selectObjects(
-        `SELECT ulid, threadId, subject, fromName, fromAddress, preview, receivedAt, isRead, labelIds, s3AttachmentsKey, hasAttachments
+        `SELECT ulid, threadId, subject, fromName, fromAddress, preview, receivedAt, isRead, labelIds, s3AttachmentsKey, hasAttachments, attachmentFilenames
          FROM email_metadata WHERE folderId = ? ORDER BY receivedMs DESC`,
         [selectedFolderId],
       ) as unknown as LocalEmail[];

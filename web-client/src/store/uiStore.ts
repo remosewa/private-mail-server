@@ -10,6 +10,7 @@ export interface ReplyContext {
   date: string;
   quotedHtml?: string;
   messageId?: string; // Message-ID of the email being replied to (for threading)
+  forwardEmailUlid?: string; // Source email ulid for forwarding attachments
 }
 
 /** Passed to ComposeModal when the user opens an existing draft for editing. */

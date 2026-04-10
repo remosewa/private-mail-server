@@ -12,6 +12,8 @@ export interface LocalEmail {
   receivedAt: string;
   isRead: number;
   labelIds: string;
+  hasAttachments?:      number | null;
+  attachmentFilenames?: string | null; // JSON array of original filenames
 }
 
 export interface ThreadGroup {
@@ -21,6 +23,7 @@ export interface ThreadGroup {
   latestMessage: LocalEmail;
   hasUnread: boolean;
   allLabels: string[];
+  attachmentFilenames: string[]; // deduplicated union across all messages in thread
   isThread: true;
 }
 
@@ -86,6 +89,7 @@ export function groupByThread(emails: LocalEmail[]): ThreadGroup[] {
       latestMessage,
       hasUnread,
       allLabels,
+      attachmentFilenames: mergeThreadFilenames(messages),
       isThread: true,
     });
   }
@@ -142,6 +146,39 @@ export function getUlidsFromItem(item: EmailOrThread): string[] {
 /**
  * Get display info for an EmailOrThread item
  */
+function parseFilenames(json: string | null | undefined): string[] {
+  if (!json) return [];
+  try {
+    return JSON.parse(json) as string[];
+  } catch (e) {
+    console.warn('[threadUtils] Failed to parse attachmentFilenames JSON:', json, e);
+    return [];
+  }
+}
+
+/**
+ * Collect all attachment filenames from messages in chronological order.
+ * Filenames that appear more than once across the thread are suffixed with
+ * (1), (2), … in time order so the latest occurrence has the highest number.
+ */
+function mergeThreadFilenames(messages: LocalEmail[]): string[] {
+  // messages are already sorted oldest-first by groupByThread
+  const allFilenames: string[] = messages.flatMap(m => parseFilenames(m.attachmentFilenames));
+
+  // Count total occurrences of each filename
+  const counts = new Map<string, number>();
+  for (const f of allFilenames) counts.set(f, (counts.get(f) ?? 0) + 1);
+
+  // Assign running index only to filenames that appear more than once
+  const seen = new Map<string, number>();
+  return allFilenames.map(f => {
+    if ((counts.get(f) ?? 0) <= 1) return f;
+    const n = (seen.get(f) ?? 0) + 1;
+    seen.set(f, n);
+    return `${f} (${n})`;
+  });
+}
+
 export function getDisplayInfo(item: EmailOrThread) {
   if (isThreadGroup(item)) {
     return {
@@ -155,9 +192,10 @@ export function getDisplayInfo(item: EmailOrThread) {
       isRead: item.hasUnread ? 0 : 1,
       labelIds: JSON.stringify(item.allLabels),
       messageCount: item.messageCount,
+      attachmentFilenames: item.attachmentFilenames,
     };
   }
-  
+
   return {
     ulid: item.ulid,
     threadId: item.threadId,
@@ -169,5 +207,6 @@ export function getDisplayInfo(item: EmailOrThread) {
     isRead: item.isRead,
     labelIds: item.labelIds,
     messageCount: 1,
+    attachmentFilenames: parseFilenames(item.attachmentFilenames),
   };
 }

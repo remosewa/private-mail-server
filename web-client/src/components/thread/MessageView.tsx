@@ -26,6 +26,8 @@ interface Props {
   privateKey: CryptoKey;
   /** Present for draft/sent emails; absent for inbound (RSA-hybrid). */
   wrappedEmailKey?: string | null;
+  /** True when email body was fetched but header fields aren't in local DB yet (sync pending). */
+  headerPending?: boolean;
 }
 
 /** Parse a List-Unsubscribe header into its constituent URL / mailto parts. */
@@ -96,7 +98,7 @@ function buildQuotedHtml(
   ].join('');
 }
 
-export default function MessageView({ header, body, attachments, cidMap, emailUlid, privateKey, wrappedEmailKey }: Props) {
+export default function MessageView({ header, body, attachments, cidMap, emailUlid, privateKey, wrappedEmailKey, headerPending }: Props) {
   const [showImages, setShowImages] = useState(false);
   const [unsubStatus, setUnsubStatus] = useState<'idle' | 'sending' | 'done'>('idle');
   const [currentFolderId, setCurrentFolderId] = useState<string>('INBOX');
@@ -274,6 +276,7 @@ useEffect(() => {
       fromAddress: header.fromAddress,
       date: header.date,
       quotedHtml: buildQuotedHtml(header, body, 'forward'),
+      forwardEmailUlid: emailUlid,
     });
   }
 
@@ -294,12 +297,19 @@ useEffect(() => {
           Back
         </button>
 
-        <h2 className="text-lg font-semibold text-gray-900 mb-1.5 dark:text-gray-100">{header.subject || '(no subject)'}</h2>
+        <h2 className="text-lg font-semibold text-gray-900 mb-1.5 dark:text-gray-100">
+          {headerPending
+            ? <span className="inline-block w-56 h-5 bg-gray-200 dark:bg-gray-700 rounded animate-pulse" />
+            : (header.subject || '(no subject)')}
+        </h2>
 
         {/* From line — always visible */}
         <div className="flex items-center justify-between gap-2">
           <p className="text-sm text-gray-600 dark:text-gray-300 truncate">
-            <span className="font-medium">From:</span> {header.fromName} &lt;{header.fromAddress}&gt;
+            <span className="font-medium">From:</span>{' '}
+            {headerPending
+              ? <span className="inline-block w-40 h-4 bg-gray-200 dark:bg-gray-700 rounded animate-pulse align-middle" />
+              : <>{header.fromName} &lt;{header.fromAddress}&gt;</>}
           </p>
           {/* Expand/collapse toggle — mobile only */}
           <button

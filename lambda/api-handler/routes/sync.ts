@@ -149,7 +149,8 @@ async function queryEmailUpdates(
       s3AttachmentsKey: rec['s3AttachmentsKey'],
       messageId:        rec['messageId'] ?? null, // Message-ID for threading
       version:          rec['version'] ?? 1,
-      hasAttachments:   rec['hasAttachments'] ?? 0, // 1 if has attachments, 0 otherwise
+      hasAttachments:       rec['hasAttachments'] ?? 0, // 1 if has attachments, 0 otherwise
+      attachmentFilenames:  (rec['attachmentFilenames'] as string | null) ?? null,
     };
   });
 
@@ -234,7 +235,8 @@ async function queryEmailUpdatesBefore(
       s3AttachmentsKey: rec['s3AttachmentsKey'],
       messageId:        rec['messageId'] ?? null, // Message-ID for threading
       version:          rec['version'] ?? 1,
-      hasAttachments:   rec['hasAttachments'] ?? 0, // 1 if has attachments, 0 otherwise
+      hasAttachments:       rec['hasAttachments'] ?? 0, // 1 if has attachments, 0 otherwise
+      attachmentFilenames:  (rec['attachmentFilenames'] as string | null) ?? null,
     };
   });
 

@@ -55,7 +55,7 @@ async function hydrateSession(): Promise<void> {
       accessToken = fresh.accessToken;
       refreshToken = fresh.refreshToken;
       expiresAt = fresh.expiresAt;
-      writeSession({ userId, username, userEmail, accessToken, refreshToken, expiresAt, publicKeyPem });
+      writeSession({ userId, username, userEmail, accessToken, refreshToken, expiresAt, publicKeyPem, isAdmin });
     } catch (err) {
       if (isRefreshTokenExpiredError(err)) {
         // Refresh token is genuinely invalid — must re-login.

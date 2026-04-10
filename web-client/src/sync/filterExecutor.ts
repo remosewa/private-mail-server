@@ -47,12 +47,12 @@ export async function executeFilter(options: FilterExecutionOptions): Promise<vo
     // Get emails from database - optionally filtered by source folder
     const query = sourceFolderId
       ? `SELECT ulid, folderId, labelIds, isRead, subject, fromName, fromAddress, preview, 
-                toAddresses, ccAddresses, receivedAt, s3AttachmentsKey, version, messageId, hasAttachments
+                toAddresses, ccAddresses, receivedAt, s3AttachmentsKey, version, messageId, hasAttachments, attachmentFilenames
          FROM email_metadata
          WHERE folderId = ?
          ORDER BY receivedMs DESC`
       : `SELECT ulid, folderId, labelIds, isRead, subject, fromName, fromAddress, preview, 
-                toAddresses, ccAddresses, receivedAt, s3AttachmentsKey, version, messageId, hasAttachments
+                toAddresses, ccAddresses, receivedAt, s3AttachmentsKey, version, messageId, hasAttachments, attachmentFilenames
          FROM email_metadata
          ORDER BY receivedMs DESC`;
     
@@ -74,6 +74,7 @@ export async function executeFilter(options: FilterExecutionOptions): Promise<vo
       version: number;
       messageId: string | null;
       hasAttachments: number;
+      attachmentFilenames: string | null;
     }>;
     
     const total = emails.length;
@@ -127,6 +128,7 @@ export async function executeFilter(options: FilterExecutionOptions): Promise<vo
         s3AttachmentsKey: email.s3AttachmentsKey,
         messageId: email.messageId ?? null,
         hasAttachments: email.hasAttachments,
+        attachmentFilenames: email.attachmentFilenames ?? null,
         header: {
           subject: email.subject,
           fromName: email.fromName,

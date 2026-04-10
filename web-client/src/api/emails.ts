@@ -24,8 +24,9 @@ export interface EmailMeta {
   s3TextKey:        string;
   s3EmbeddingKey:   string;
   s3AttachmentsKey: string;
-  messageId:        string | null; // Message-ID header for threading
-  hasAttachments:   number; // 1 if email has attachments, 0 otherwise
+  messageId:           string | null; // Message-ID header for threading
+  hasAttachments:      number; // 1 if email has attachments, 0 otherwise
+  attachmentFilenames: string | null; // JSON array of original filenames, e.g. '["resume.pdf","photo.jpg"]'
 }
 
 export interface ListEmailsResponse {

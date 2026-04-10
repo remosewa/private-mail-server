@@ -393,7 +393,7 @@ export async function handleBatchGetEmails(event: ApiEvent): Promise<ApiResult> 
       RequestItems: {
         [EMAILS_TABLE]: {
           Keys: keys,
-          ProjectionExpression: 'ulid, threadId, folderId, labelIds, #rd, receivedAt, lastUpdatedAt, #version, s3HeaderKey, headerBlob, wrappedEmailKey, s3BodyKey, s3TextKey, s3EmbeddingKey, s3AttachmentsKey, messageId, hasAttachments',
+          ProjectionExpression: 'ulid, threadId, folderId, labelIds, #rd, receivedAt, lastUpdatedAt, #version, s3HeaderKey, headerBlob, wrappedEmailKey, s3BodyKey, s3TextKey, s3EmbeddingKey, s3AttachmentsKey, messageId, hasAttachments, attachmentFilenames',
           ExpressionAttributeNames: {
             '#rd': 'read',
             '#version': 'version',
@@ -424,6 +424,7 @@ export async function handleBatchGetEmails(event: ApiEvent): Promise<ApiResult> 
         s3AttachmentsKey: email.s3AttachmentsKey as string,
         messageId: email.messageId as string | null,
         hasAttachments: email.hasAttachments as number,
+        attachmentFilenames: (email.attachmentFilenames as string | null) ?? null,
       };
     });
 
@@ -1019,6 +1020,7 @@ export async function handleSendEmail(event: ApiEvent): Promise<ApiResult> {
     filename: string; size: number; contentType: string; attachmentId?: string;
   }>;
   const hasAttachments = attMeta.length > 0 ? 1 : 0;
+  const attachmentFilenames = JSON.stringify(attMeta.map(a => a.filename));
 
   console.log('[handleSendEmail] emailId:', emailId, 'hasInReplyTo:', !!header.inReplyTo);
 
@@ -1115,7 +1117,7 @@ export async function handleSendEmail(event: ApiEvent): Promise<ApiResult> {
       wrappedEmailKey,
       headerBlob: headerBlobBase64, // Inline for sync endpoint (avoids S3 round-trip on next sync)
       s3HeaderKey, s3BodyKey, s3TextKey, s3EmbeddingKey, s3AttachmentsKey,
-      hasAttachments,
+      hasAttachments, attachmentFilenames,
       ...(header.messageId ? { messageId: header.messageId } : {}), // Store Message-ID for threading
     }),
   }));
