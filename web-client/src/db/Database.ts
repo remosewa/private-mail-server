@@ -40,7 +40,7 @@ class VecDb implements SqliteDb {
 
   constructor(
     /** The dedicated worker for this tab — SQL goes here if we are the leader. */
-    private readonly dedicatedWorker: Worker,
+    readonly dedicatedWorker: Worker,
     /** The SharedWorker port — SQL is routed here when we are NOT the leader. */
     readonly port: MessagePort,
     rawDbKey: Uint8Array,
@@ -54,12 +54,39 @@ class VecDb implements SqliteDb {
       rejectReady = rej;
     });
 
+    // Surface worker startup failures (module load error, WASM crash, etc.)
+    dedicatedWorker.onerror = (e: ErrorEvent): void => {
+      console.error('[Database] Dedicated worker crashed:', e.message, e.filename, e.lineno);
+      rejectReady(new Error(`Dedicated worker crashed: ${e.message}`));
+    };
+
     // Listen for SQL replies from the dedicated worker (leader path)
     dedicatedWorker.onmessage = (e: MessageEvent): void => {
       const { type, id, result, error } =
         e.data as { type?: string; id?: number; result?: unknown; error?: string };
 
+      if (type === 'worker-ping') {
+        console.log('[Database] Dedicated worker reached onmessage — module loaded OK');
+        return;
+      }
+
+      if (type === 'lock-acquired') {
+        // The current lock holder just entered becomeLeader before WASM init.
+        // Logged for observability — the 20 s steal timeout is the actual guard
+        // against stealing a healthy-but-slow leader.
+        console.log('[Database] Lock holder signalled lock-acquired — WASM init in progress');
+        return;
+      }
+
       if (type === 'leader-ready') {
+        // Wire the dedicated worker into the SharedWorker router via a
+        // MessageChannel so non-leader tabs can forward SQL queries here.
+        // Doing this here (not in initDbInner) ensures there's exactly one
+        // listener and no orphaned addEventListener closures on retry.
+        const { port1, port2 } = new MessageChannel();
+        dedicatedWorker.postMessage({ type: 'add-router-port', port: port1 }, [port1]);
+        port.postMessage({ type: 'i-am-leader', leaderPort: port2 }, [port2]);
+
         this.isLeader = true;
         resolveReady();
         // Send periodic heartbeats so the SharedWorker can detect if this tab
@@ -69,7 +96,11 @@ class VecDb implements SqliteDb {
         }, 5_000);
         return;
       }
-      if (type === 'leader-error') { rejectReady(new Error(error)); return; }
+      if (type === 'leader-error') {
+        console.error('[Database] Dedicated worker failed to open DB:', error);
+        rejectReady(new Error(error));
+        return;
+      }
 
       if (id !== undefined) {
         const entry = this.pending.get(id);
@@ -191,9 +222,38 @@ class VecDb implements SqliteDb {
       clearInterval(this.heartbeatInterval);
       this.heartbeatInterval = null;
     }
-    this.port.postMessage({ type: 'leader-closed' });
+    // Only the leader should send leader-closed — non-leader tabs closing must
+    // not null out the SharedWorker's leaderPort and break other tabs' routing.
+    if (this.isLeader) {
+      this.port.postMessage({ type: 'leader-closed' });
+    }
     this.port.close();
     this.dedicatedWorker.terminate();
+  }
+
+  /**
+   * Prepare this instance for corruption recovery: stop the heartbeat, reject
+   * all in-flight RPCs, and install a one-shot onmessage that terminates the
+   * worker once it signals recover-complete (wipe done, lock released).
+   * Does NOT terminate the worker immediately — it must finish the OPFS wipe first.
+   */
+  prepareForRecovery(reason: string, onComplete: () => void): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
+    for (const [, entry] of this.pending) {
+      entry.reject(new Error(reason));
+    }
+    this.pending.clear();
+    // Replace onmessage with a one-shot handler: terminate the worker once the
+    // wipe is done so the Web Lock is released and a fresh worker can acquire it.
+    this.dedicatedWorker.onmessage = (e: MessageEvent) => {
+      if (e.data?.type === 'recover-complete' || e.data?.type === 'leader-error') {
+        this.dedicatedWorker.terminate();
+        onComplete();
+      }
+    };
   }
 }
 
@@ -202,12 +262,27 @@ class VecDb implements SqliteDb {
 let dbPromise: Promise<SqliteDb> | null = null;
 let currentUserId: string | null = null;
 let currentDb: VecDb | null = null;
+/** Sync timer used in no-SharedWorker mode — cleared on teardown to prevent leaks. */
+let noSharedWorkerSyncInterval: ReturnType<typeof setInterval> | null = null;
+
+/** True when SharedWorker is unavailable (e.g. Android Chrome). */
+const sharedWorkerSupported = typeof SharedWorker !== 'undefined';
 
 // ── Worker communication helpers ─────────────────────────────────────────────
 
-/** Send a fire-and-forget message to the SharedWorker. */
+/** Send a fire-and-forget message to the SharedWorker (no-op when unsupported). */
 export function sendToWorker(msg: Record<string, unknown>): void {
-  currentDb?.port.postMessage(msg);
+  if (sharedWorkerSupported) {
+    currentDb?.port.postMessage(msg);
+  } else {
+    // In no-SharedWorker mode the dedicated worker drives sync directly;
+    // simulate the response messages that the shared worker would broadcast.
+    if (msg.type === 'sync-result') {
+      dispatchWorkerMessage({ type: 'sync-done', synced: msg.synced ?? 0 });
+      // Trigger index after sync completes (mirrors shared worker behaviour)
+      dispatchWorkerMessage({ type: 'do-index' });
+    }
+  }
 }
 
 type WorkerHandler = (msg: Record<string, unknown>) => void;
@@ -227,6 +302,10 @@ function dispatchWorkerMessage(msg: Record<string, unknown>): void {
 }
 
 export function teardownDb(): void {
+  if (noSharedWorkerSyncInterval) {
+    clearInterval(noSharedWorkerSyncInterval);
+    noSharedWorkerSyncInterval = null;
+  }
   currentDb?.close();
   currentDb = null;
   dbPromise = null;
@@ -243,8 +322,10 @@ export function getDb(): Promise<SqliteDb> {
 
   if (!dbPromise) {
     dbPromise = initDb();
-    // Reset on failure so the next call retries (e.g. if called before privateKey was set)
-    dbPromise.catch(() => { dbPromise = null; });
+    // Reset on failure so the next call retries. Use setTimeout(0) so all
+    // current waiters receive the rejection before dbPromise is cleared —
+    // prevents a burst of concurrent callers from each spawning a new initDb().
+    dbPromise.catch(() => { setTimeout(() => { dbPromise = null; }, 0); });
   }
   return dbPromise;
 }
@@ -252,17 +333,36 @@ export function getDb(): Promise<SqliteDb> {
 // ── Corruption recovery ───────────────────────────────────────────────────────
 
 async function recoverCorruptDb(userId: string): Promise<void> {
-  console.error('[Database] SQLITE_CORRUPT — sending recover-corrupt to SharedWorker');
+  console.error('[Database] SQLITE_CORRUPT — sending recover-corrupt to dedicated worker');
   remoteLogger.error('Database corruption detected — wiping local DB and resyncing', { userId });
 
-  // Tell the SharedWorker to wipe the OPFS files and reinitialise
-  currentDb?.port.postMessage({ type: 'recover-corrupt' });
-
-  // Reset client-side singleton so the next getDb() connects fresh
-  currentDb?.close();
+  const dying = currentDb;
   currentDb = null;
-  dbPromise = null;
+  // Don't clear dbPromise yet — clear it only once the worker signals
+  // recover-complete, so getDb() callers wait rather than spawning a new
+  // worker that would immediately contend for the still-held Web Lock.
   currentUserId = null;
+
+  if (dying) {
+    const recoveryTimeout = setTimeout(() => {
+      console.warn('[Database] Recovery timed out — forcing dbPromise reset');
+      dbPromise = null;
+    }, 30_000);
+
+    dying.prepareForRecovery('Database corruption recovery in progress', () => {
+      clearTimeout(recoveryTimeout);
+      dbPromise = null;
+    });
+
+    if (sharedWorkerSupported) {
+      dying.port.postMessage({ type: 'recover-corrupt' });
+    } else {
+      dying.dedicatedWorker.postMessage({ type: 'recover-corrupt' });
+    }
+    dying.port.close();
+  } else {
+    dbPromise = null;
+  }
 }
 
 // ── Schema init ───────────────────────────────────────────────────────────────
@@ -273,10 +373,46 @@ async function initDbInner(): Promise<SqliteDb> {
 
   const rawDbKey = await getOrCreateDbKey(userId, privateKey, publicKey);
 
+  // Terminate any stale db instance left over from a previous failed initDb attempt.
+  if (currentDb) {
+    currentDb.close();
+    currentDb = null;
+  }
+
   // Spawn the dedicated worker for this tab — it will race for the leader lock
   const dedicated = new DedicatedDbWorker({ name: `chase-email-db-dedicated-${userId}` });
 
-  // Connect to the SharedWorker router
+  if (!sharedWorkerSupported) {
+    // ── No-SharedWorker fallback (e.g. Android Chrome) ──────────────────────
+    // Use a MessageChannel as a fake "shared worker port" so VecDb's constructor
+    // works unchanged. The dedicated worker IS the leader; VecDb's leader-ready
+    // handler wires up add-router-port automatically.
+    const { port1, port2 } = new MessageChannel();
+    port1.start();
+    port2.start();
+    // Drain messages sent to port2 (e.g. i-am-leader) so the channel doesn't back up.
+    // Close any transferred ports to avoid leaks.
+    port2.onmessage = (e: MessageEvent) => {
+      if (e.data?.leaderPort) (e.data.leaderPort as MessagePort).close();
+    };
+
+    const db = new VecDb(dedicated, port1, rawDbKey, userId, () => { void recoverCorruptDb(userId); });
+    currentDb = db;
+    await db.ready;
+    await applySchema(db);
+
+    // Kick off periodic sync (mirrors SharedWorker behaviour)
+    const SYNC_INTERVAL_MS = 30_000;
+    dispatchWorkerMessage({ type: 'do-sync' });
+    noSharedWorkerSyncInterval = setInterval(() => dispatchWorkerMessage({ type: 'do-sync' }), SYNC_INTERVAL_MS);
+
+    return db;
+  }
+
+  // ── Normal path: SharedWorker available ─────────────────────────────────
+  // Connect to the SharedWorker router. VecDb's constructor handles the
+  // leader-ready → add-router-port + i-am-leader handshake internally;
+  // no duplicate addEventListener needed here.
   const shared = new SharedDbWorker({ name: 'chase-email-db' });
   shared.onerror = (e: ErrorEvent) => {
     remoteLogger.error('SharedWorker failed to load', { message: e.message });
@@ -284,22 +420,16 @@ async function initDbInner(): Promise<SqliteDb> {
   };
   shared.port.start();
 
-  // When the dedicated worker becomes leader, announce it to the SharedWorker
-  dedicated.addEventListener('message', (e: MessageEvent) => {
-    if (e.data?.type === 'leader-ready') {
-      // Transfer a MessageChannel port to the SharedWorker so it can forward
-      // SQL queries from other tabs to this dedicated worker
-      const { port1, port2 } = new MessageChannel();
-      // The dedicated worker listens on port1 for forwarded queries
-      dedicated.postMessage({ type: 'add-router-port', port: port1 }, [port1]);
-      // The SharedWorker uses port2 to forward queries to us
-      shared.port.postMessage({ type: 'i-am-leader', leaderPort: port2 }, [port2]);
-    }
-  });
-
   const db = new VecDb(dedicated, shared.port, rawDbKey, userId, () => { void recoverCorruptDb(userId); });
   currentDb = db;
+  await db.ready;
+  await applySchema(db);
+  return db;
+}
 
+// ── Schema creation + migrations ──────────────────────────────────────────────
+
+async function applySchema(db: VecDb): Promise<void> {
   // ── Base schema ─────────────────────────────────────────────────────────
   await db.exec(`
     CREATE TABLE IF NOT EXISTS email_metadata (
@@ -490,8 +620,7 @@ async function initDbInner(): Promise<SqliteDb> {
   }
 
   if (version < 14) {
-    await db.exec('BEGIN');
-    try {
+    await db.withTransaction(async () => {
       await db.exec(`
         CREATE TABLE email_metadata_new (
           email_id         INTEGER PRIMARY KEY,
@@ -556,11 +685,7 @@ async function initDbInner(): Promise<SqliteDb> {
       `);
       await db.exec(`UPDATE email_metadata SET indexed_at = NULL`);
       await db.exec('PRAGMA user_version = 14');
-      await db.exec('COMMIT');
-    } catch (err) {
-      await db.exec('ROLLBACK');
-      throw err;
-    }
+    });
   }
 
   if (version < 15) {
@@ -572,14 +697,16 @@ async function initDbInner(): Promise<SqliteDb> {
     try { await db.exec('ALTER TABLE email_metadata ADD COLUMN attachmentFilenames TEXT'); } catch { /* already exists */ }
     await db.exec('PRAGMA user_version = 16');
   }
-
-  return db;
 }
 
 async function initDb(): Promise<SqliteDb> {
+  console.log('[Database] initDb starting…');
   try {
-    return await initDbInner();
+    const db = await initDbInner();
+    console.log('[Database] initDb succeeded');
+    return db;
   } catch (err) {
+    console.error('[Database] initDb failed:', String(err));
     remoteLogger.error('Database initialization failed', { error: String(err) });
     throw err;
   }

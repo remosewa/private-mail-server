@@ -214,6 +214,12 @@ function handleMessage(port: MessagePort, ev: MessageEvent) {
     return;
   }
 
+  if (data.type === 'recover-corrupt') {
+    // Forward to the leader's dedicated worker so it can wipe OPFS and reinitialise.
+    if (leaderPort) leaderPort.postMessage({ type: 'recover-corrupt' });
+    return;
+  }
+
   // ── SQL query — forward to leader ────────────────────────────────────────
 
   if ('id' in data) {

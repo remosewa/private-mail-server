@@ -57,10 +57,10 @@ let readyPromise: Promise<void> = new Promise<void>((res, rej) => {
   pendingReject = rej;
 });
 
-// Serial execution queue + transaction lock
+// Serial execution queue — transactions are serialised client-side via
+// VecDb.withTransaction / txDone, so the dedicated worker just needs a
+// simple FIFO queue with no per-port transaction tracking.
 let execQueue: Promise<void> = Promise.resolve();
-let txOwnerPort: MessagePort | null = null;
-const deferredMessages: Array<{ port: MessagePort; req: SqlReq }> = [];
 
 // ---------------------------------------------------------------------------
 // DB open
@@ -72,14 +72,23 @@ function printErrFilter(msg: string) {
 }
 
 async function openDb(key: Uint8Array, userId: string, skipProxyInstall = false): Promise<any> {
-  if (!skipProxyInstall) installEncryptionProxy(key);
+  if (!skipProxyInstall) {
+    try {
+      installEncryptionProxy(key);
+    } catch (proxyErr) {
+      // On some Android builds, prototype mutation of FileSystemFileHandle is
+      // rejected (strict context isolation).  Log and fall through to in-memory.
+      console.warn('[dedicated-worker] installEncryptionProxy failed — will use in-memory DB:', proxyErr);
+      return new (await sqlite3InitModule({ printErr: printErrFilter })).oo1.DB(':memory:', 'c');
+    }
+  }
 
   const sqlite3: any = await sqlite3InitModule({ printErr: printErrFilter });
   const directory = `.chase-email-enc-db-${userId}`;
 
   if (typeof sqlite3.installOpfsSAHPoolVfs === 'function') {
     try {
-      await sqlite3.installOpfsSAHPoolVfs({ directory, capacity: 6 });
+      await sqlite3.installOpfsSAHPoolVfs({ directory, capacity: 3 });
       return new sqlite3.oo1.DB({ filename: '/chase-email.db', vfs: 'opfs-sahpool' });
     } catch (opfsErr) {
       const msg = String(opfsErr);
@@ -97,23 +106,70 @@ async function openDb(key: Uint8Array, userId: string, skipProxyInstall = false)
 // Leader election
 // ---------------------------------------------------------------------------
 
-function tryBecomeLeader(key: Uint8Array, userId: string) {
-  navigator.locks.request('chase-email-sqlite-leader', async () => {
+/** Called once the Web Lock is acquired. Opens the DB and holds the lock forever
+ *  (until the worker is terminated). On failure, returns so the lock is released. */
+async function becomeLeader() {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const isolated = (self as any).crossOriginIsolated;
+  console.log('[dedicated-worker] Became leader — crossOriginIsolated=', isolated, ' SharedArrayBuffer=', typeof SharedArrayBuffer);
+
+  // Signal immediately — before the heavy WASM init — so competing workers
+  // can reset their steal timers and not steal a healthy leader mid-init.
+  self.postMessage({ type: 'lock-acquired' });
+
+  try {
+    db = await openDb(savedKey!, savedUserId!);
+    // Only mark as leader after the DB is ready — prevents runQuery from
+    // calling db.exec() on a null db if a SQL message arrives during init.
     isLeader = true;
-    console.log('[dedicated-worker] Became leader, opening DB...');
+    pendingResolve();
+    self.postMessage({ type: 'leader-ready' });
+    // Hold the lock indefinitely — released only when the worker is terminated.
+    // Use a periodic no-op timer so Android's background scheduler doesn't
+    // treat this worker as frozen/idle and silently kill it.
+    await new Promise<void>(() => { setInterval(() => {}, 30_000); });
+  } catch (err) {
+    console.error('[dedicated-worker] Failed to open DB — releasing leader lock:', err);
+    pendingReject(err instanceof Error ? err : new Error(String(err)));
+    self.postMessage({ type: 'leader-error', error: String(err) });
+    // Return → lock is released → lets a fresh worker retry.
+  }
+}
 
-    try {
-      db = await openDb(key, userId);
-      pendingResolve();
-      self.postMessage({ type: 'leader-ready' });
-    } catch (err) {
-      pendingReject(err instanceof Error ? err : new Error(String(err)));
-      self.postMessage({ type: 'leader-error', error: String(err) });
-    }
+function tryBecomeLeader() {
+  console.log('[dedicated-worker] Requesting leader lock…');
 
-    // Hold the lock indefinitely — released when worker is terminated
-    await new Promise<void>(() => {});
-  });
+  // Abort the normal request after 20 s and steal the lock instead.
+  // 5 s was too aggressive — WASM init on mid-range Android takes 3–6 s,
+  // so a healthy leader could be stolen while still in sqlite3InitModule.
+  const controller = new AbortController();
+  const stealTimer = setTimeout(() => {
+    console.warn('[dedicated-worker] Lock not acquired after 20 s — stealing from stale holder');
+    controller.abort();
+  }, 20_000);
+
+  navigator.locks
+    .request('chase-email-sqlite-leader', { signal: controller.signal }, async () => {
+      clearTimeout(stealTimer);
+      await becomeLeader();
+    })
+    .catch((err: Error) => {
+      if (err.name !== 'AbortError') {
+        // Unexpected lock error (not a timeout).
+        console.error('[dedicated-worker] Lock request failed:', err);
+        pendingReject(err);
+        self.postMessage({ type: 'leader-error', error: String(err) });
+        return;
+      }
+      // Distinguish: if controller.signal.aborted, WE triggered the abort (5 s timeout)
+      // → steal the lock from the stale holder.
+      // If signal is NOT aborted, our lock was stolen BY someone else
+      // → exit gracefully; don't steal back (that creates a mutual steal loop).
+      if (controller.signal.aborted) {
+        navigator.locks.request('chase-email-sqlite-leader', { steal: true }, () => becomeLeader());
+      }
+      // else: our lock was stolen — just exit, the thief is now responsible.
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -141,25 +197,8 @@ async function runQuery(replyPort: MessagePort | typeof self, req: SqlReq): Prom
 }
 
 function enqueueQuery(replyPort: MessagePort | typeof self, req: SqlReq) {
-  const portKey = replyPort as MessagePort;
-
-  if (txOwnerPort !== null && portKey !== txOwnerPort) {
-    deferredMessages.push({ port: portKey, req });
-    return;
-  }
-
-  if (req.sql === 'BEGIN') txOwnerPort = portKey;
-
   execQueue = execQueue
-    .then(async () => {
-      await runQuery(replyPort, req);
-      if (req.sql === 'COMMIT' || req.sql === 'ROLLBACK') {
-        txOwnerPort = null;
-        for (const { port: p, req: r } of deferredMessages.splice(0)) {
-          enqueueQuery(p, r);
-        }
-      }
-    })
+    .then(() => runQuery(replyPort, req))
     .catch(() => {});
 }
 
@@ -173,8 +212,7 @@ async function recoverCorrupt() {
 
   try { db?.close(); } catch { /* ignore */ }
   db = null;
-  txOwnerPort = null;
-  deferredMessages.splice(0);
+  execQueue = Promise.resolve();
 
   try {
     const root = await navigator.storage.getDirectory();
@@ -194,9 +232,14 @@ async function recoverCorrupt() {
     db = await openDb(savedKey, savedUserId, true);
     pendingResolve();
     self.postMessage({ type: 'leader-ready' });
+    // Signal that the wipe + re-open is fully complete so the main thread
+    // can safely terminate this worker and spawn a fresh one.
+    self.postMessage({ type: 'recover-complete' });
   } catch (err) {
     pendingReject(err instanceof Error ? err : new Error(String(err)));
     self.postMessage({ type: 'leader-error', error: String(err) });
+    // Also signal completion on failure so the main thread doesn't wait forever.
+    self.postMessage({ type: 'recover-complete' });
   }
 }
 
@@ -208,9 +251,14 @@ self.onmessage = (ev: MessageEvent) => {
   const data = ev.data;
 
   if (data.type === 'init') {
+    // Post back immediately — before any lock/WASM/SQLite code — so the main
+    // thread can confirm this worker's onmessage handler was reached.
+    // If the main thread never sees 'worker-ping', the worker crashed during
+    // module evaluation (import of sqlite-vec-wasm-demo / @noble/ciphers).
+    self.postMessage({ type: 'worker-ping' });
     savedKey = data.key as Uint8Array;
     savedUserId = data.userId as string;
-    tryBecomeLeader(savedKey, savedUserId);
+    tryBecomeLeader();
     return;
   }
 
