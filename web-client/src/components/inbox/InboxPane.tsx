@@ -1,12 +1,11 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useAuthStore } from '../../store/authStore';
 import { useUiStore } from '../../store/uiStore';
 import { useIndexStore } from '../../store/indexStore';
 import { useFolderStore, RESERVED_FOLDER_IDS } from '../../store/folderStore';
-import { SyncManager } from '../../sync/SyncManager';
-import { getDb } from '../../db/Database';
+import { getDb, sendToWorker, subscribeToWorker } from '../../db/Database';
 import { keywordSearch, phraseSearch, semanticSearch } from '../../search/searcher';
 import { parseSearchQuery, resolveLabelIds, filterByLabels, filterByFolders, filterByReadStatus } from '../../search/labelParser';
 import { getEmbedderClient } from '../../search/EmbedderClient';
@@ -66,8 +65,13 @@ export default function InboxPane() {
   // Ulids matching body FTS conditions (keyed by lowercase search term)
   const [bodyMatchUlids, setBodyMatchUlids] = useState<Map<string, Set<string>>>(new Map());
 
-  // Get current folder's filter
-  const emailFilter = folderFilters[selectedFolderId] || { operator: 'AND', groups: [] };
+  // Get current folder's filter — memoised to avoid new object references on every render
+  // (FilterModal has a useEffect that depends on filter, and a new reference on every render
+  // would cause infinite re-renders via setJsonValue)
+  const emailFilter = useMemo(
+    () => folderFilters[selectedFolderId] ?? { operator: 'AND' as const, groups: [] },
+    [folderFilters, selectedFolderId],
+  );
   
   const totalFilterConditions = emailFilter.groups.reduce((sum, g) => sum + g.conditions.length, 0);
   
@@ -158,24 +162,23 @@ export default function InboxPane() {
   const canMoveEmails = !NO_MOVE_FOLDERS.has(selectedFolderId);
 
   function doSync() {
-    if (!privateKey) return;
-    const mgr = SyncManager.getInstance(privateKey);
     setSyncing(true);
     setSyncError('');
-    const t0 = performance.now();
-    mgr.syncNewOnly()
-      .then(() => {
-        console.log('[InboxPane] syncNewOnly done in', Math.round(performance.now() - t0), 'ms — invalidating query');
-        setSyncing(false);
-        window.dispatchEvent(new Event('search-refresh-requested'));
-        void queryClient.invalidateQueries({ queryKey: ['emails', selectedFolderId] })
-          .then(() => console.log('[InboxPane] query invalidated +', Math.round(performance.now() - t0), 'ms total'));
-      })
-      .catch(err => {
-        setSyncing(false);
-        setSyncError(err instanceof Error ? err.message : 'Sync failed');
-      });
+    // getDb() ensures currentDb is set before sendToWorker is called
+    getDb().then(() => sendToWorker({ type: 'request-sync' })).catch(() => {
+      setSyncing(false);
+    });
   }
+
+  // Listen for sync-done broadcasts from the SharedWorker
+  useEffect(() => {
+    return subscribeToWorker((msg) => {
+      if (msg.type !== 'sync-done') return;
+      setSyncing(false);
+      window.dispatchEvent(new Event('search-refresh-requested'));
+      void queryClient.invalidateQueries({ queryKey: ['emails', selectedFolderId] });
+    });
+  }, [selectedFolderId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     setSearchQuery('');
@@ -192,7 +195,7 @@ export default function InboxPane() {
     const handleRefreshRequest = () => { doSync(); };
     window.addEventListener('inbox-refresh-requested', handleRefreshRequest);
     return () => { window.removeEventListener('inbox-refresh-requested', handleRefreshRequest); };
-  }, [privateKey, selectedFolderId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Close move dropdown on outside click
   useEffect(() => {

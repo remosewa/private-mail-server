@@ -7,6 +7,21 @@ import { viteStaticCopy } from 'vite-plugin-static-copy';
 import fs from 'node:fs';
 import path from 'node:path';
 
+// COOP/COEP headers are required for SharedArrayBuffer (OPFS SAH pool VFS).
+// server.headers applies them globally, but we add an explicit middleware so
+// the SharedWorker script itself also receives them — required for the worker
+// to have crossOriginIsolated = true and thus access to SharedArrayBuffer.
+const crossOriginIsolationHeaders = {
+  name: 'cross-origin-isolation-headers',
+  configureServer(server: import('vite').ViteDevServer) {
+    server.middlewares.use((_req, res, next) => {
+      res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+      res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
+      next();
+    });
+  },
+};
+
 // sqlite-vec-wasm-demo doesn't ship sqlite3-opfs-async-proxy.js, but sqlite3.mjs
 // tries to load it relative to itself.  Serve it from @sqlite.org/sqlite-wasm in dev.
 const sqliteOpfsProxy = {
@@ -33,6 +48,7 @@ export default defineConfig({
     tailwindcss(),
     wasm(),
     topLevelAwait(),
+    crossOriginIsolationHeaders,
     sqliteOpfsProxy,
     // sqlite3-worker1.js hardcodes "sqlite3.wasm" and "sqlite3-opfs-async-proxy.js"
     // by their original names (no hash).  Vite hashes these when bundling, so the
@@ -72,7 +88,7 @@ export default defineConfig({
     headers: {
       // Required for SharedArrayBuffer (sqlite-wasm OPFS, transformers.js)
       'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'credentialless',
+      'Cross-Origin-Embedder-Policy': 'require-corp',
     },
   },
 });

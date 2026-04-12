@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useAuthStore } from '../../store/authStore';
 import { apiClient } from '../../api/client';
 import { useSyncStore } from '../../store/syncStore';
-import { SyncManager } from '../../sync/SyncManager';
+import { sendToWorker } from '../../db/Database';
 
 interface MigrationStatus {
   state: 'idle' | 'uploading' | 'extracting' | 'running' | 'completed' | 'failed';
@@ -44,16 +44,11 @@ export default function MboxMigration() {
   const handleForceResync = async (days: number | null) => {
     setResyncDialogOpen(false);
     setResyncing(true);
-    try {
-      const fromDate = days === null
-        ? new Date(0)
-        : new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-      const { privateKey } = useAuthStore.getState();
-      if (!privateKey) return;
-      await SyncManager.getInstance(privateKey).syncFrom(fromDate);
-    } finally {
-      setResyncing(false);
-    }
+    const fromDate = days === null
+      ? new Date(0)
+      : new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    sendToWorker({ type: 'request-sync-from', fromDate: fromDate.toISOString() });
+    setResyncing(false);
   };
 
   // Poll migration status

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useAuthStore, readSession, writeSession } from './store/authStore';
 import { loadPrivateKey } from './db/KeyStore';
-import { refreshTokens } from './api/auth';
+import { refreshTokens, getKeyBundle } from './api/auth';
 import { importPublicKeyPem } from './crypto/KeyManager';
 import LoginPage from './pages/LoginPage';
 import MailPage from './pages/MailPage';
@@ -10,11 +10,11 @@ import SettingsPage from './pages/SettingsPage';
 import AdminPage from './pages/AdminPage';
 import { useUiStore } from './store/uiStore';
 import { useIndexStore } from './store/indexStore';
-import { useDbStore } from './store/dbStore';
 import { useFolderStore } from './store/folderStore';
 import { useSettingsStore } from './store/settingsStore';
 import { startIndexing } from './search/indexer';
 import { SyncManager } from './sync/SyncManager';
+import { sendToWorker, subscribeToWorker } from './db/Database';
 
 // Load debug utilities in development
 if (import.meta.env.DEV) {
@@ -83,15 +83,21 @@ async function hydrateSession(): Promise<void> {
   const publicKey = await importPublicKeyPem(publicKeyPem);
   setKeys({ privateKey, publicKey, publicKeyPem });
   if (userEmail) setUserEmail(userEmail);
-  setIsAdmin(isAdmin ?? false);
 
-  // Load user settings
-  try {
-    await loadSettings(privateKey);
-  } catch (err) {
-    console.error('Failed to load settings:', err);
-    // Non-fatal - continue with default settings
-  }
+  // Run independently — no ordering dependency between them
+  await Promise.all([
+    // Re-fetch isAdmin from the server so it's always up-to-date (the stored
+    // session value may be stale or missing if the session predates this field).
+    getKeyBundle()
+      .then(bundle => {
+        setIsAdmin(bundle.isAdmin);
+        writeSession({ userId, username, userEmail, accessToken, refreshToken, expiresAt, publicKeyPem, isAdmin: bundle.isAdmin });
+      })
+      .catch(() => setIsAdmin(isAdmin ?? false)), // fallback to stored value if offline
+
+    loadSettings(privateKey)
+      .catch(err => console.error('Failed to load settings:', err)),
+  ]);
 }
 
 export default function App() {
@@ -99,8 +105,7 @@ export default function App() {
   const userId = useAuthStore(s => s.userId);
   const { privateKey, publicKey, username, refreshToken, expiresAt } = useAuthStore();
   const { activePage, darkMode } = useUiStore();
-  const dbDisconnected = useDbStore(s => s.disconnected);
-  const { enabled, setProgress } = useIndexStore();
+const { enabled, setProgress } = useIndexStore();
   const indexAbortRef = useRef<AbortController | null>(null);
 
   // Clear all user-scoped caches whenever the logged-in user changes (including logout).
@@ -167,55 +172,77 @@ export default function App() {
     return () => clearInterval(interval);
   }, [userId, username, refreshToken, expiresAt]);
 
-  // Background indexer — lives here so it persists across page navigation
+  // Background indexer — triggered by worker 'do-index' messages
   useEffect(() => {
     indexAbortRef.current?.abort();
     indexAbortRef.current = null;
 
     if (!enabled || !privateKey || !publicKey) return;
 
-    const controller = new AbortController();
-    indexAbortRef.current = controller;
+    const unsubscribe = subscribeToWorker((msg) => {
+      if (msg.type !== 'do-index') return;
 
-    startIndexing({
-      privateKey,
-      publicKey,
-      signal: controller.signal,
-      onProgress: (p) => setProgress(p),
-    }).catch(() => { /* per-email errors handled inside startIndexing */ });
+      indexAbortRef.current?.abort();
+      const controller = new AbortController();
+      indexAbortRef.current = controller;
 
-    return () => { controller.abort(); };
+      startIndexing({
+        privateKey,
+        publicKey,
+        signal: controller.signal,
+        onProgress: (p) => setProgress(p),
+      })
+        .catch(() => { /* per-email errors handled inside startIndexing */ })
+        .finally(() => sendToWorker({ type: 'index-result' }));
+    });
+
+    return () => {
+      unsubscribe();
+      indexAbortRef.current?.abort();
+      indexAbortRef.current = null;
+    };
   }, [enabled, privateKey, publicKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Periodic sync polling — adaptive interval based on email count
+  // Sync — driven by the SharedWorker (timer + do-sync messages)
   useEffect(() => {
     if (!userId || !privateKey) return;
 
     const syncManager = SyncManager.getInstance(privateKey);
 
-    // Warm up OPFS so the first notification-triggered sync doesn't pay cold-start latency
-    syncManager.warmup().catch(() => { });
-
-    let intervalId: number;
-
-    const runSync = async () => {
-      try {
-        await syncManager.sync();
-      } catch (err) {
-        console.error('[App] Sync failed:', err);
+    const unsubscribe = subscribeToWorker((msg) => {
+      if (msg.type === 'do-sync') {
+        const t0 = performance.now();
+        console.log('[App] do-sync received, starting syncHead');
+        // Run head sync first — sends sync-result immediately so all tabs refresh.
+        // Tail sync (backfill) runs after without blocking the UI update.
+        syncManager.syncHead()
+          .then(synced => {
+            console.log(`[App] syncHead done in ${Math.round(performance.now() - t0)}ms, synced=${synced}`);
+            sendToWorker({ type: 'sync-result', synced });
+            return syncManager.syncTail();
+          })
+          .catch(err => {
+            console.error('[App] Sync failed:', err);
+            sendToWorker({ type: 'sync-result', synced: 0 });
+          });
+      } else if (msg.type === 'do-sync-from') {
+        const fromDate = msg.fromDate as string;
+        syncManager.syncFrom(new Date(fromDate))
+          .then(() => sendToWorker({ type: 'sync-result', synced: 0 }))
+          .catch(err => {
+            console.error('[App] Sync-from failed:', err);
+            sendToWorker({ type: 'sync-result', synced: 0 });
+          });
       }
-    };
+    });
 
-    // Initial sync
-    runSync();
+    // Warm up OPFS (initialises currentDb) — registration with the SharedWorker
+    // is now handled automatically inside VecDb constructor.
+    syncManager.warmup()
+      .catch(() => { });
 
-    // Start with 5-second interval (will adjust after first sync)
-    intervalId = window.setInterval(runSync, 30000);
-
-    return () => {
-      if (intervalId) clearInterval(intervalId);
-    };
-  }, [userId, privateKey]);
+    return () => { unsubscribe(); };
+  }, [userId, privateKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!ready) {
     return (
@@ -231,12 +258,6 @@ export default function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      {dbDisconnected && (
-        <div className="fixed top-0 inset-x-0 z-50 bg-yellow-500 text-white text-sm text-center py-2 px-4">
-          This tab is inactive — another tab has the database open.
-          {' '}<button className="underline font-medium" onClick={() => window.location.reload()}>Reload to activate</button>
-        </div>
-      )}
       {userId ? (
         activePage === 'settings' ? <SettingsPage /> :
           activePage === 'admin' ? <AdminPage /> :
