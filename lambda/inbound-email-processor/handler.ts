@@ -695,6 +695,7 @@ async function sendPushNotification(
     await webpush.sendNotification(
       { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
       payload,
+      { TTL: 4 * 3600 }, // Drop notification if not delivered within 4 hours
     );
   } catch (err: unknown) {
     const statusCode = (err as { statusCode?: number }).statusCode;
