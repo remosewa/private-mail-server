@@ -61,6 +61,7 @@ interface AuthState {
   refreshToken: string | null;
   expiresAt:    number | null; // ms epoch
   isAdmin:      boolean;
+  hasRecoveryKey: boolean | null; // null = unknown (session predates this field)
 
   // RSA keypair — CryptoKey objects (private key held in IndexedDB too)
   privateKey:    CryptoKey | null;
@@ -77,6 +78,7 @@ interface AuthState {
 
   setUserEmail(email: string): void;
   setIsAdmin(isAdmin: boolean): void;
+  setHasRecoveryKey(v: boolean): void;
 
   setKeys(params: {
     privateKey:   CryptoKey;
@@ -94,22 +96,24 @@ interface AuthState {
 }
 
 export const useAuthStore = create<AuthState>(set => ({
-  userId:       null,
-  username:     null,
-  userEmail:    null,
-  accessToken:  null,
-  refreshToken: null,
-  expiresAt:    null,
-  isAdmin:      false,
-  privateKey:   null,
-  publicKey:    null,
-  publicKeyPem: null,
+  userId:         null,
+  username:       null,
+  userEmail:      null,
+  accessToken:    null,
+  refreshToken:   null,
+  expiresAt:      null,
+  isAdmin:        false,
+  hasRecoveryKey: null,
+  privateKey:     null,
+  publicKey:      null,
+  publicKeyPem:   null,
 
   setAuth: ({ userId, username, accessToken, refreshToken, expiresAt }) =>
     set({ userId, username, accessToken, refreshToken, expiresAt }),
 
   setUserEmail: (email) => set({ userEmail: email }),
   setIsAdmin: (isAdmin) => set({ isAdmin }),
+  setHasRecoveryKey: (v) => set({ hasRecoveryKey: v }),
 
   setKeys: ({ privateKey, publicKey, publicKeyPem }) =>
     set({ privateKey, publicKey, publicKeyPem }),
@@ -127,16 +131,17 @@ export const useAuthStore = create<AuthState>(set => ({
     teardownDb();
     clearSession();
     set({
-      userId:       null,
-      username:     null,
-      userEmail:    null,
-      accessToken:  null,
-      refreshToken: null,
-      expiresAt:    null,
-      isAdmin:      false,
-      privateKey:   null,
-      publicKey:    null,
-      publicKeyPem: null,
+      userId:         null,
+      username:       null,
+      userEmail:      null,
+      accessToken:    null,
+      refreshToken:   null,
+      expiresAt:      null,
+      isAdmin:        false,
+      hasRecoveryKey: null,
+      privateKey:     null,
+      publicKey:      null,
+      publicKeyPem:   null,
     });
   },
 }));

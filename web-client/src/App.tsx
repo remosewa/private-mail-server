@@ -45,7 +45,7 @@ async function hydrateSession(): Promise<void> {
   const saved = readSession();
   if (!saved) return;
 
-  const { setAuth, setKeys, setUserEmail, setIsAdmin, clearAuth } = useAuthStore.getState();
+  const { setAuth, setKeys, setUserEmail, setIsAdmin, setHasRecoveryKey, clearAuth } = useAuthStore.getState();
   let { userId, username, userEmail, accessToken, refreshToken, expiresAt, publicKeyPem, isAdmin } = saved;
 
   // Refresh tokens if within 5 minutes of expiry (or already expired)
@@ -91,6 +91,7 @@ async function hydrateSession(): Promise<void> {
     getKeyBundle()
       .then(bundle => {
         setIsAdmin(bundle.isAdmin);
+        setHasRecoveryKey(bundle.hasRecoveryKey);
         writeSession({ userId, username, userEmail, accessToken, refreshToken, expiresAt, publicKeyPem, isAdmin: bundle.isAdmin });
       })
       .catch(() => setIsAdmin(isAdmin ?? false)), // fallback to stored value if offline
@@ -207,7 +208,7 @@ const { enabled, setProgress } = useIndexStore();
   useEffect(() => {
     if (!userId || !privateKey) return;
 
-    const syncManager = SyncManager.getInstance(privateKey);
+    const syncManager = SyncManager.getInstance(privateKey, userId);
 
     const unsubscribe = subscribeToWorker((msg) => {
       if (msg.type === 'do-sync') {

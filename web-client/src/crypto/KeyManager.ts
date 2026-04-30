@@ -104,7 +104,7 @@ export async function unwrapPrivateKey(
     wrappingKey,
     { name: 'AES-GCM', iv },
     { name: 'RSA-OAEP', hash: 'SHA-256' },
-    false,
+    true,
     ['decrypt'],
   );
 }
@@ -145,4 +145,45 @@ export async function importPublicKeyPem(pem: string): Promise<CryptoKey> {
 export function generateArgon2Salt(): string {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   return btoa(String.fromCharCode(...salt));
+}
+
+// ---------------------------------------------------------------------------
+// Recovery key generation and derivation
+// ---------------------------------------------------------------------------
+
+/**
+ * Generate a 256-bit random recovery key formatted as 8 groups of 8 uppercase hex chars.
+ * Example: "A1B2C3D4-E5F6A7B8-C9D0E1F2-A3B4C5D6-E7F8A9B0-C1D2E3F4-A5B6C7D8-E9F0A1B2"
+ */
+export function generateRecoveryKey(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  const hex = [...bytes].map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+  const groups = [];
+  for (let i = 0; i < 64; i += 8) groups.push(hex.slice(i, i + 8));
+  return groups.join('-');
+}
+
+/**
+ * Derive an AES-256-GCM wrapping key from a recovery key string.
+ * Uses the "enc:" domain prefix so the key material is distinct from the verification hash.
+ */
+export async function deriveWrappingKeyFromRecoveryKey(recoveryKey: string): Promise<CryptoKey> {
+  const canonical = recoveryKey.replace(/-/g, '').toLowerCase();
+  const input = new TextEncoder().encode('enc:' + canonical);
+  const hash = await crypto.subtle.digest('SHA-256', input);
+  return crypto.subtle.importKey('raw', hash, { name: 'AES-GCM' }, false, ['wrapKey', 'unwrapKey']);
+}
+
+/**
+ * Convert a display-format recovery key to a Cognito-compatible password.
+ * The recovery key hex bytes are base64-encoded (44 chars), satisfying the
+ * Cognito password policy (min length 16, no character class requirements).
+ */
+export function recoveryKeyToCognitoPassword(displayKey: string): string {
+  const hex = displayKey.replace(/-/g, '');
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return btoa(String.fromCharCode(...bytes));
 }

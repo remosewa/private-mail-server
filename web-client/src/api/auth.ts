@@ -40,6 +40,18 @@ const userPool = new CognitoUserPool({
   Storage:    memoryStorage,
 });
 
+let _recoveryUserPool: CognitoUserPool | null = null;
+function getRecoveryUserPool(): CognitoUserPool {
+  if (!_recoveryUserPool) {
+    _recoveryUserPool = new CognitoUserPool({
+      UserPoolId: import.meta.env['VITE_COGNITO_RECOVERY_USER_POOL_ID'] as string,
+      ClientId:   import.meta.env['VITE_COGNITO_RECOVERY_CLIENT_ID'] as string,
+      Storage:    memoryStorage,
+    });
+  }
+  return _recoveryUserPool;
+}
+
 // Region derived from pool ID prefix (e.g. "us-west-2_jFbitvDRO" → "us-west-2")
 const awsRegion = (import.meta.env['VITE_COGNITO_USER_POOL_ID'] as string).split('_')[0]!;
 const COGNITO_ENDPOINT = `https://cognito-idp.${awsRegion}.amazonaws.com/`;
@@ -59,13 +71,15 @@ export type LoginResult =
   | { type: 'totp_required' };
 
 export interface RegisterBody {
-  inviteCode:          string;
-  username:            string;
-  email:               string;
-  publicKey:           string; // PEM SPKI
-  encryptedPrivateKey: string; // base64(iv || wrapped PKCS8)
-  argon2Salt:          string; // base64
-  password:            string;
+  inviteCode:                   string;
+  username:                     string;
+  email:                        string;
+  publicKey:                    string; // PEM SPKI
+  encryptedPrivateKey:          string; // base64(iv || wrapped PKCS8)
+  argon2Salt:                   string; // base64
+  password:                     string;
+  recoveryEncryptedPrivateKey?: string; // base64(iv || wrapped PKCS8), encrypted with recovery key
+  cognitoRecoveryPassword?:     string; // base64(rawKeyBytes) — used as Cognito password for the {username}__recovery user
 }
 
 // ---------------------------------------------------------------------------
@@ -75,9 +89,9 @@ export interface RegisterBody {
 // Holds the in-progress MFA CognitoUser across the TOTP challenge step
 let pendingMfaUser: CognitoUser | null = null;
 
-export function login(username: string, password: string): Promise<LoginResult> {
+function loginWithPool(pool: CognitoUserPool, username: string, password: string): Promise<LoginResult> {
   return new Promise((resolve, reject) => {
-    const user    = new CognitoUser({ Username: username, Pool: userPool, Storage: memoryStorage });
+    const user    = new CognitoUser({ Username: username, Pool: pool, Storage: memoryStorage });
     const details = new AuthenticationDetails({ Username: username, Password: password });
 
     user.authenticateUser(details, {
@@ -96,6 +110,15 @@ export function login(username: string, password: string): Promise<LoginResult> 
       },
     });
   });
+}
+
+export function login(username: string, password: string): Promise<LoginResult> {
+  return loginWithPool(userPool, username, password);
+}
+
+/** Authenticate against the recovery user pool to obtain a recovery JWT. */
+export function loginForRecovery(username: string, cognitoPassword: string): Promise<LoginResult> {
+  return loginWithPool(getRecoveryUserPool(), username, cognitoPassword);
 }
 
 /** Cancel a pending MFA session (e.g. user clicks "Back to login"). */
@@ -150,6 +173,7 @@ export interface KeyBundle {
   argon2Salt:          string; // base64
   email:               string;
   isAdmin:             boolean;
+  hasRecoveryKey:      boolean;
 }
 
 export async function getKeyBundle(): Promise<KeyBundle> {
@@ -236,8 +260,73 @@ export async function getMfaStatus(accessToken: string): Promise<boolean> {
 }
 
 // ---------------------------------------------------------------------------
+// Recovery key — private key wrapped with the recovery key, stored server-side
+// ---------------------------------------------------------------------------
+
+/** Store the recovery-key-encrypted private key + create the recovery Cognito user. Fails with 409 if one already exists. */
+export async function storeRecoveryKey(
+  recoveryEncryptedPrivateKey: string,
+  cognitoRecoveryPassword: string,
+): Promise<void> {
+  await apiClient.put('/auth/recovery-key', { recoveryEncryptedPrivateKey, cognitoRecoveryPassword });
+}
+
+const API_BASE = import.meta.env['VITE_API_URL'] as string;
+
+async function apiFetch<T>(path: string, accessToken: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+      ...(init?.headers ?? {}),
+    },
+  });
+  if (res.status === 204) return undefined as T;
+  const data = await res.json() as T & { error?: string };
+  if (!res.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+  return data;
+}
+
+/**
+ * Fetch the recovery-encrypted private key blob using a JWT from the {username}__recovery Cognito user.
+ * Call login(username + '__recovery', cognitoPassword) first to obtain the access token.
+ */
+export async function fetchRecoveryBundle(
+  recoveryAccessToken: string,
+): Promise<{ recoveryEncryptedPrivateKey: string }> {
+  return apiFetch<{ recoveryEncryptedPrivateKey: string }>('/auth/recover/bundle', recoveryAccessToken);
+}
+
+/**
+ * Reset the account password and re-encrypted private key after a successful recovery.
+ * Uses the recovery user's JWT — the server deletes the recovery Cognito user on success,
+ * invalidating the old recovery key.
+ */
+export async function rekeyAccount(body: {
+  recoveryAccessToken: string;
+  newPassword: string;
+  newEncryptedPrivateKey: string;
+  newArgon2Salt: string;
+}): Promise<void> {
+  const { recoveryAccessToken, ...rest } = body;
+  await apiFetch<unknown>('/auth/recover/rekey', recoveryAccessToken, {
+    method: 'POST',
+    body: JSON.stringify(rest),
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Recovery codes — generated client-side, stored server-side as SHA-256 hashes
 // ---------------------------------------------------------------------------
+
+/**
+ * Validate a backup recovery code and disable TOTP for the account.
+ * Used when the user has lost access to their authenticator app.
+ */
+export async function recoverMfa(username: string, recoveryCode: string): Promise<void> {
+  await apiClient.post('/auth/recover/mfa', { username, recoveryCode });
+}
 
 /** Generate 8 random recovery codes and store their SHA-256 hashes via the API.
  *  Returns the plaintext codes — show these to the user exactly once. */

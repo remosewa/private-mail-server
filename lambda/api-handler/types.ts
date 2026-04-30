@@ -16,6 +16,10 @@ export interface RegisterBody {
   argon2Salt: string;
   /** Cognito password (also used on-device to derive the Argon2 KEK). */
   password: string;
+  /** Private key wrapped with the recovery key (base64). Optional — provided when the user saves a recovery key at registration. */
+  recoveryEncryptedPrivateKey?: string;
+  /** base64(rawKeyBytes) used as the Cognito password for the {username}__recovery secondary user. */
+  cognitoRecoveryPassword?: string;
 }
 
 export interface FlagsBody {

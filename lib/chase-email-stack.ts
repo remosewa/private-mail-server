@@ -1,6 +1,6 @@
 import * as path from 'path';
 import * as cdk from 'aws-cdk-lib';
-import { Construct } from 'constructs';
+import { Construct, IConstruct } from 'constructs';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as route53Targets from 'aws-cdk-lib/aws-route53-targets';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
@@ -361,6 +361,39 @@ export class PrivateMailStack extends cdk.Stack {
     });
 
     // =========================================================
+    // Cognito — Recovery User Pool
+    // Separate pool used exclusively for recovery credentials.
+    // Each user has a matching entry here whose password is derived
+    // from their recovery key; authenticating proves key knowledge.
+    // No email, no MFA, no self-signup.
+    // =========================================================
+    const recoveryUserPool = new cognito.UserPool(this, 'RecoveryUserPool', {
+      userPoolName: 'chase-email-recovery',
+      selfSignUpEnabled: false,
+      signInAliases: { username: true },
+      mfa: cognito.Mfa.OFF,
+      passwordPolicy: {
+        minLength: 16,
+        requireLowercase: false,
+        requireUppercase: false,
+        requireDigits: false,
+        requireSymbols: false,
+      },
+      accountRecovery: cognito.AccountRecovery.NONE,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    const recoveryUserPoolClient = new cognito.UserPoolClient(this, 'RecoveryUserPoolClient', {
+      userPool: recoveryUserPool,
+      userPoolClientName: 'chase-recovery-client',
+      generateSecret: false,
+      authFlows: {
+        userPassword: true,
+        userSrp: true,
+      },
+    });
+
+    // =========================================================
     // IAM Roles — one per Lambda family, least-privilege
     // =========================================================
 
@@ -430,8 +463,10 @@ export class PrivateMailStack extends cdk.Stack {
         'cognito-idp:AdminCreateUser',
         'cognito-idp:AdminSetUserPassword',
         'cognito-idp:AdminGetUser',
+        'cognito-idp:AdminDeleteUser',
+        'cognito-idp:AdminSetUserMFAPreference',
       ],
-      resources: [userPool.userPoolArn],
+      resources: [userPool.userPoolArn, recoveryUserPool.userPoolArn],
     }));
     // SES outbound send (resource-level permissions not supported for SendRawEmail)
     apiLambdaRole.addToPolicy(new iam.PolicyStatement({
@@ -607,6 +642,7 @@ export class PrivateMailStack extends cdk.Stack {
       environment: {
         USER_POOL_ID: userPool.userPoolId,
         USER_POOL_CLIENT_ID: userPoolClient.userPoolClientId,
+        RECOVERY_USER_POOL_ID: recoveryUserPool.userPoolId,
         USERS_TABLE_NAME: usersTable.tableName,
         EMAILS_TABLE_NAME: emailsTable.tableName,
         INVITES_TABLE_NAME: invitesTable.tableName,
@@ -996,22 +1032,31 @@ export class PrivateMailStack extends cdk.Stack {
       { jwtAudience: [userPoolClient.userPoolClientId] },
     );
 
+    const recoveryJwtAuthorizer = new apigatewayv2Authorizers.HttpJwtAuthorizer(
+      'RecoveryAuthorizer',
+      `https://cognito-idp.${this.region}.amazonaws.com/${recoveryUserPool.userPoolId}`,
+      { jwtAudience: [recoveryUserPoolClient.userPoolClientId] },
+    );
+
     const apiIntegration = new apigatewayv2Integrations.HttpLambdaIntegration(
       'ApiIntegration',
       apiHandlerFn,
     );
 
-    // Public route — no JWT required (user doesn't have one yet)
-    httpApi.addRoutes({
-      path: '/auth/register',
-      methods: [apigatewayv2.HttpMethod.POST],
-      integration: apiIntegration,
-    });
+    // Public routes — no JWT required
+    for (const publicPath of ['/auth/register', '/auth/recover/mfa']) {
+      httpApi.addRoutes({
+        path: publicPath,
+        methods: [apigatewayv2.HttpMethod.POST],
+        integration: apiIntegration,
+      });
+    }
 
     // Protected routes — JWT required; userId resolved from the `sub` claim
     const protectedRoutes: [apigatewayv2.HttpMethod, string][] = [
       [apigatewayv2.HttpMethod.GET, '/auth/key-bundle'],
       [apigatewayv2.HttpMethod.POST, '/auth/recovery-codes'],
+      [apigatewayv2.HttpMethod.PUT, '/auth/recovery-key'],
       [apigatewayv2.HttpMethod.GET, '/emails'],
       [apigatewayv2.HttpMethod.POST, '/emails/batch-get'],
       [apigatewayv2.HttpMethod.GET, '/emails/{ulid}/header'],
@@ -1066,6 +1111,34 @@ export class PrivateMailStack extends cdk.Stack {
         authorizer: jwtAuthorizer,
       });
     }
+
+    // Recovery routes — authorized by the recovery user pool (separate from the main pool)
+    for (const [method, routePath] of [
+      [apigatewayv2.HttpMethod.GET,  '/auth/recover/bundle'],
+      [apigatewayv2.HttpMethod.POST, '/auth/recover/rekey'],
+    ] as [apigatewayv2.HttpMethod, string][]) {
+      httpApi.addRoutes({
+        path: routePath,
+        methods: [method],
+        integration: apiIntegration,
+        authorizer: recoveryJwtAuthorizer,
+      });
+    }
+
+    // CDK generates one Lambda::Permission per route. With 50+ routes the policy
+    // exceeds Lambda's 20 KB resource-policy limit. Replace all of them with a
+    // single wildcard permission scoped to this API.
+    apiHandlerFn.addPermission('AllApiGwInvoke', {
+      principal: new iam.ServicePrincipal('apigateway.amazonaws.com'),
+      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:${httpApi.apiId}/*/*`,
+    });
+    cdk.Aspects.of(httpApi).add({
+      visit(node: IConstruct): void {
+        if (node instanceof lambda.CfnPermission) {
+          node.node.scope?.node.tryRemoveChild(node.node.id);
+        }
+      },
+    });
 
     // =========================================================
     // ACM Certificate + Custom Domain for API Gateway
@@ -1321,6 +1394,8 @@ export class PrivateMailStack extends cdk.Stack {
     p('UserPoolId', userPool.userPoolId);
     p('UserPoolArn', userPool.userPoolArn);
     p('UserPoolClientId', userPoolClient.userPoolClientId);
+    p('RecoveryUserPoolId', recoveryUserPool.userPoolId);
+    p('RecoveryUserPoolClientId', recoveryUserPoolClient.userPoolClientId);
     p('ApiHandlerArn', apiHandlerFn.functionArn);
     p('ApiUrl', `https://${apiSubdomain}`);
 
@@ -1380,6 +1455,8 @@ export class PrivateMailStack extends cdk.Stack {
     });
     new cdk.CfnOutput(this, 'UserPoolId', { value: userPool.userPoolId });
     new cdk.CfnOutput(this, 'UserPoolClientId', { value: userPoolClient.userPoolClientId });
+    new cdk.CfnOutput(this, 'RecoveryUserPoolId', { value: recoveryUserPool.userPoolId });
+    new cdk.CfnOutput(this, 'RecoveryUserPoolClientId', { value: recoveryUserPoolClient.userPoolClientId });
     new cdk.CfnOutput(this, 'ApiUrl', {
       value: `https://${apiSubdomain}`,
       description: 'Base URL for the Chase Email REST API',

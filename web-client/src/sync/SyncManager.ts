@@ -25,6 +25,7 @@ import { remoteLogger } from '../api/logger';
 export class SyncManager {
   private static instance: SyncManager | null = null;
   private privateKey: CryptoKey;
+  private userId: string;
   private static syncing = false;
   private filters: SavedFilter[] = [];
   private filtersLastFetched = 0;
@@ -32,23 +33,28 @@ export class SyncManager {
   // undefined = not yet loaded from DB; null = DB was empty; string = last known value
   private cachedLatestTimestamp: string | null | undefined = undefined;
 
-  private constructor(privateKey: CryptoKey) {
+  private constructor(privateKey: CryptoKey, userId: string) {
     this.privateKey = privateKey;
+    this.userId = userId;
+  }
+
+  private get syncCursorKey(): string {
+    return `sync_cursor_${this.userId}`;
   }
 
   /**
    * Get or create the singleton instance.
-   * Must be called with a privateKey on first access.
+   * Must be called with a privateKey and userId on first access.
    */
-  static getInstance(privateKey?: CryptoKey): SyncManager {
+  static getInstance(privateKey?: CryptoKey, userId?: string): SyncManager {
     if (!SyncManager.instance) {
-      if (!privateKey) {
-        throw new Error('SyncManager: privateKey required for first getInstance() call');
+      if (!privateKey || !userId) {
+        throw new Error('SyncManager: privateKey and userId required for first getInstance() call');
       }
-      SyncManager.instance = new SyncManager(privateKey);
+      SyncManager.instance = new SyncManager(privateKey, userId);
     } else if (privateKey) {
-      // Update the private key if provided (e.g., after re-login)
       SyncManager.instance.privateKey = privateKey;
+      if (userId) SyncManager.instance.userId = userId;
     }
     return SyncManager.instance;
   }
@@ -77,7 +83,7 @@ export class SyncManager {
       // Roll cursor back and skip the early-exit optimisation so we page through
       // everything in the window even if some emails are already present locally.
       // Clear localStorage cursor so syncHead uses our rolled-back date, not the stored one.
-      localStorage.removeItem('sync_cursor');
+      localStorage.removeItem(this.syncCursorKey);
       this.cachedLatestTimestamp = fromDate.toISOString();
       await this.syncHead(true);
       // Reset so next regular sync re-reads from the newly written sync_cursor.
@@ -172,7 +178,7 @@ export class SyncManager {
     //console.log('[SyncManager] syncHead: refreshFilters done', Math.round(performance.now() - t0), 'ms');
 
     // Get the most recent lastUpdatedAt — prefer syncCursor (survives refresh) over in-memory cache
-    const storedCursor = localStorage.getItem('sync_cursor');
+    const storedCursor = localStorage.getItem(this.syncCursorKey);
     const usingSyncCursor = storedCursor !== null;
     let latestTimestamp: string | null;
     if (usingSyncCursor) {
@@ -283,7 +289,7 @@ export class SyncManager {
     // Commit the max timestamp seen — safe to advance cursor now that all pages completed
     if (newMaxTimestamp) {
       this.cachedLatestTimestamp = newMaxTimestamp;
-      localStorage.setItem('sync_cursor', newMaxTimestamp);
+      localStorage.setItem(this.syncCursorKey, newMaxTimestamp);
     }
 
     // Final count update using running count

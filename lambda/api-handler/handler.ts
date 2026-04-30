@@ -29,7 +29,10 @@
  */
 
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
-import { handleRegister, handleKeyBundle, handleStoreRecoveryCodes } from './routes/auth';
+import {
+  handleRegister, handleKeyBundle, handleStoreRecoveryCodes,
+  handleStoreRecoveryKey, handleFetchRecoveryBundle, handleRekeyAccount, handleRecoverMfa,
+} from './routes/auth';
 import {
   handleListEmails,
   handleBatchGetEmails,
@@ -66,8 +69,12 @@ export const handler = async (
   try {
     switch (event.routeKey) {
       case 'POST /auth/register':                          return await handleRegister(event);
+      case 'POST /auth/recover/mfa':                       return await handleRecoverMfa(event);
       case 'GET /auth/key-bundle':                         return await handleKeyBundle(event);
+      case 'GET /auth/recover/bundle':                     return await handleFetchRecoveryBundle(event);
+      case 'POST /auth/recover/rekey':                     return await handleRekeyAccount(event);
       case 'POST /auth/recovery-codes':                    return await handleStoreRecoveryCodes(event);
+      case 'PUT /auth/recovery-key':                       return await handleStoreRecoveryKey(event);
       case 'GET /emails':                                  return await handleListEmails(event);
       case 'POST /emails/batch-get':                       return await handleBatchGetEmails(event);
       case 'GET /emails/{ulid}/header':                    return await handleGetEmailHeader(event);

@@ -15,6 +15,7 @@ import {
   generateAndStoreRecoveryCodes,
 } from '../api/auth';
 import MboxMigration from '../components/settings/MboxMigration';
+import RecoveryKeySetupModal from '../components/RecoveryKeySetupModal';
 
 // ── 2FA setup wizard steps ─────────────────────────────────────────────────
 
@@ -27,7 +28,7 @@ type TotpSetupStep =
 export default function SettingsPage() {
   const { darkMode, setDarkMode, threadViewEnabled, setThreadViewEnabled, setActivePage } = useUiStore();
   const { enabled, setEnabled, total, indexed, running, modelReady, reset } = useIndexStore();
-  const { accessToken, userEmail, publicKey, isAdmin } = useAuthStore();
+  const { accessToken, userEmail, publicKey, isAdmin, hasRecoveryKey, setHasRecoveryKey } = useAuthStore();
   const { settings } = useSettingsStore();
 
   // ── Display name state ────────────────────────────────────────────────────
@@ -44,6 +45,9 @@ export default function SettingsPage() {
   const [mfaLoading, setMfaLoading]     = useState(false);
   const [disableConfirm, setDisableConfirm] = useState(false);
   const [copiedCodes, setCopiedCodes]   = useState(false);
+
+  // ── Recovery key state ────────────────────────────────────────────────────
+  const [showRecoveryModal, setShowRecoveryModal] = useState(false);
 
   // Load display name from settings
   useEffect(() => {
@@ -434,6 +438,37 @@ export default function SettingsPage() {
             </div>
           )}
         </div>
+
+        {/* Recovery key */}
+        <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 p-5 dark:border-gray-700 dark:bg-gray-900">
+          <h2 className="text-base font-medium">Recovery key</h2>
+          <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
+            A recovery key lets you regain access to your encrypted mail if you forget your password.
+          </p>
+          {hasRecoveryKey === true && (
+            <div className="mt-3 flex items-center gap-2 text-sm text-green-700 dark:text-green-400">
+              <svg className="h-4 w-4 shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+              </svg>
+              Recovery key is set up.
+            </div>
+          )}
+          {hasRecoveryKey === false && (
+            <button
+              onClick={() => setShowRecoveryModal(true)}
+              className="mt-4 px-4 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+            >
+              Set up recovery key
+            </button>
+          )}
+        </div>
+
+        {showRecoveryModal && (
+          <RecoveryKeySetupModal
+            onClose={() => setShowRecoveryModal(false)}
+            onSuccess={() => { setShowRecoveryModal(false); setHasRecoveryKey(true); }}
+          />
+        )}
 
         {/* Search index */}
         <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 p-5 dark:border-gray-700 dark:bg-gray-900">
