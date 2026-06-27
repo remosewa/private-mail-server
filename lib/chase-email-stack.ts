@@ -1316,7 +1316,7 @@ export class PrivateMailStack extends cdk.Stack {
           // 'require-corp' has universal browser support; 'credentialless' (Chrome 96+)
           // is not recognised by older Android Chrome/WebView and leaves crossOriginIsolated=false,
           // which makes SharedArrayBuffer unavailable and breaks sqlite-wasm initialisation.
-          { header: 'Cross-Origin-Embedder-Policy', value: 'require-corp', override: true },
+          { header: 'Cross-Origin-Embedder-Policy', value: 'credentialless', override: true },
         ],
       },
     });

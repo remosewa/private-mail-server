@@ -17,12 +17,12 @@ interface Props {
   wrappedEmailKey?: string | null;
 }
 
-const COLLAPSE_THRESHOLD = 3;
-
 export default function AttachmentList({ attachments, emailUlid, privateKey, wrappedEmailKey }: Props) {
   const [downloading, setDownloading] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [expanded, setExpanded] = useState(attachments.length <= COLLAPSE_THRESHOLD);
+  // Collapsed by default on mobile so the attachments don't claim the bottom of the
+  // screen; expanded by default on wider viewports where there's room.
+  const [expanded, setExpanded] = useState(() => window.innerWidth >= 768);
 
   if (!attachments.length) return null;
 
@@ -56,23 +56,19 @@ export default function AttachmentList({ attachments, emailUlid, privateKey, wra
     }
   }
 
-  const canCollapse = attachments.length > COLLAPSE_THRESHOLD;
-
   return (
     <div className="border-t border-gray-200 px-4 py-3">
       <button
-        onClick={() => canCollapse && setExpanded(v => !v)}
-        className={`flex items-center gap-1.5 w-full text-left mb-2 group
-                    ${canCollapse ? 'cursor-pointer' : 'cursor-default'}`}
+        onClick={() => setExpanded(v => !v)}
+        className="flex items-center gap-1.5 w-full text-left mb-2 group cursor-pointer"
+        aria-expanded={expanded}
       >
         <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">
           Attachments ({attachments.length})
         </p>
-        {canCollapse && (
-          <span className="text-gray-400 text-xs group-hover:text-gray-600 transition-colors ml-auto">
-            {expanded ? '▲ collapse' : '▼ show all'}
-          </span>
-        )}
+        <span className="text-gray-400 text-xs group-hover:text-gray-600 transition-colors ml-auto">
+          {expanded ? '▲ collapse' : '▼ show'}
+        </span>
       </button>
 
       {expanded && (
@@ -99,41 +95,6 @@ export default function AttachmentList({ attachments, emailUlid, privateKey, wra
               )}
             </div>
           ))}
-        </div>
-      )}
-
-      {!expanded && (
-        <div className="flex flex-wrap gap-2">
-          {attachments.slice(0, COLLAPSE_THRESHOLD).map((a) => (
-            <div key={a.attachmentId} className="flex flex-col">
-              <button
-                onClick={() => void download(a)}
-                disabled={downloading !== null}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200
-                           disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-sm
-                           transition-colors text-left"
-              >
-                <span className="text-gray-600">{a.filename}</span>
-                <span className="text-gray-400 text-xs">{formatBytes(a.size)}</span>
-                {downloading === a.attachmentId ? (
-                  <span className="text-gray-400 text-xs">…</span>
-                ) : (
-                  <span className="text-gray-400 text-xs">↓</span>
-                )}
-              </button>
-              {errors[a.attachmentId] && (
-                <span className="text-xs text-red-500 px-1 mt-0.5">{errors[a.attachmentId]}</span>
-              )}
-            </div>
-          ))}
-          <button
-            onClick={() => setExpanded(true)}
-            className="flex items-center px-3 py-1.5 bg-gray-50 hover:bg-gray-100
-                       border border-dashed border-gray-300 rounded-lg text-xs text-gray-500
-                       hover:text-gray-700 transition-colors"
-          >
-            +{attachments.length - COLLAPSE_THRESHOLD} more
-          </button>
         </div>
       )}
     </div>

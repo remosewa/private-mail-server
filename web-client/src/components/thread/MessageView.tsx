@@ -193,6 +193,7 @@ export default function MessageView({ header, body, attachments, cidMap, emailUl
 
   const rawHtml = body.htmlBody || `<pre style="font-family:sans-serif;white-space:pre-wrap">${body.textBody}</pre>`;
   const cidHtml = cidMap.size > 0 ? replaceCidImages(rawHtml, cidMap) : rawHtml;
+
   const safeHtml = showImages ? cidHtml : blockExternalImages(cidHtml);
 
   const hasExternalImages = /src\s*=\s*["']https?:/i.test(rawHtml);

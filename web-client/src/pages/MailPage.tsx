@@ -6,6 +6,7 @@ import ComposePane from '../components/compose/ComposeModal';
 import RecoveryKeySetupModal from '../components/RecoveryKeySetupModal';
 import { useUiStore } from '../store/uiStore';
 import { usePushSubscription } from '../hooks/usePushSubscription';
+import { useEmailBackGesture } from '../hooks/useEmailBackGesture';
 import { useAuthStore } from '../store/authStore';
 
 export default function MailPage() {
@@ -26,6 +27,7 @@ export default function MailPage() {
     setNudgeVisible(true);
   }
   usePushSubscription();
+  useEmailBackGesture();
 
   // Listen for service worker messages
   useEffect(() => {

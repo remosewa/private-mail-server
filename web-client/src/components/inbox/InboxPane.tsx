@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useAuthStore } from '../../store/authStore';
@@ -496,7 +496,26 @@ for (const hit of hitMap.values()) {
   }, [searchQuery, runSearch]);
 
   const isSearchActive = searchQuery.trim().length > 0;
-  
+
+  // Preserve the inbox scroll position across a search. When the user starts typing
+  // we stash where they were; when the search is cleared we restore it, so clearing
+  // returns them to the exact view they had instead of jumping to the top.
+  const savedScrollRef = useRef(0);
+  const prevSearchActiveRef = useRef(false);
+  useLayoutEffect(() => {
+    if (isSearchActive && !prevSearchActiveRef.current) {
+      savedScrollRef.current = parentRef.current?.scrollTop ?? 0;
+    } else if (!isSearchActive && prevSearchActiveRef.current) {
+      const el = parentRef.current;
+      const target = savedScrollRef.current;
+      if (el) {
+        // Restore after the virtualizer re-renders the original list (next frame).
+        requestAnimationFrame(() => { el.scrollTop = target; });
+      }
+    }
+    prevSearchActiveRef.current = isSearchActive;
+  }, [isSearchActive]);
+
   // Apply filters to emails
   const applyFilters = useCallback((emails: LocalEmail[]): LocalEmail[] => {
     if (emailFilter.groups.length === 0) return emails;

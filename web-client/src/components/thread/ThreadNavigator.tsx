@@ -39,6 +39,10 @@ function formatDateTime(iso: string): string {
 export default function ThreadNavigator({ currentUlid, threadId, folderId }: Props) {
   const { selectEmail, threadViewEnabled } = useUiStore();
   const [expandedUlids, setExpandedUlids] = useState<Set<string>>(new Set([currentUlid]));
+  // The message list is collapsed by default so the thread summary stays a single
+  // compact bar (especially important on mobile, where the full accordion used to
+  // consume half the screen). Tap the header to reveal the full list.
+  const [listExpanded, setListExpanded] = useState(false);
 
   // Query all messages in this thread (DESC order - newest first)
   const { data: messages = [] } = useQuery<ThreadMessage[]>({
@@ -125,14 +129,26 @@ export default function ThreadNavigator({ currentUlid, threadId, folderId }: Pro
 
   return (
     <div className="border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-950">
-      {/* Header with navigation */}
+      {/* Header with navigation — tapping the label toggles the full message list */}
       <div className="flex items-center justify-between px-4 py-2 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
-        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-          Thread ({messages.length} messages)
-        </span>
+        <button
+          onClick={() => setListExpanded(v => !v)}
+          className="flex items-center gap-1.5 min-w-0 text-sm font-medium text-gray-700 dark:text-gray-300
+                     hover:text-gray-900 dark:hover:text-gray-100 transition-colors"
+          aria-expanded={listExpanded}
+          title={listExpanded ? 'Hide messages' : 'Show all messages'}
+        >
+          <svg
+            className={`w-4 h-4 shrink-0 text-gray-400 transition-transform ${listExpanded ? 'rotate-90' : ''}`}
+            viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+          >
+            <polyline points="9 18 15 12 9 6" />
+          </svg>
+          <span className="truncate">Thread · {messages.length} messages</span>
+        </button>
 
         {/* Navigation controls */}
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 shrink-0">
           <button
             onClick={navigateNext}
             disabled={!hasNext}
@@ -161,8 +177,10 @@ export default function ThreadNavigator({ currentUlid, threadId, folderId }: Pro
         </div>
       </div>
 
-      {/* Accordion list of messages */}
-      <div className="divide-y divide-gray-200 dark:divide-gray-700">
+      {/* Accordion list of messages — collapsed by default, capped height when shown
+          so a long thread scrolls internally instead of pushing the body off-screen */}
+      {listExpanded && (
+      <div className="divide-y divide-gray-200 dark:divide-gray-700 max-h-64 overflow-y-auto">
         {messages.map((message) => {
           const isCurrent = message.ulid === currentUlid;
           const isExpanded = expandedUlids.has(message.ulid);
@@ -247,6 +265,7 @@ export default function ThreadNavigator({ currentUlid, threadId, folderId }: Pro
           );
         })}
       </div>
+      )}
     </div>
   );
 }
