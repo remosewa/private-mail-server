@@ -50,7 +50,7 @@ export default function ThreadPane() {
       // Load header fields + wrappedEmailKey from local DB (header already decrypted during sync)
       const db = await getDb();
       const rows = await db.selectObjects(
-        'SELECT threadId, subject, fromName, fromAddress, preview, toAddresses, receivedAt, wrappedEmailKey, listUnsubscribe, listUnsubscribePost, messageId FROM email_metadata WHERE ulid = ?',
+        'SELECT threadId, subject, fromName, fromAddress, preview, toAddresses, ccAddresses, receivedAt, wrappedEmailKey, listUnsubscribe, listUnsubscribePost, messageId FROM email_metadata WHERE ulid = ?',
         [selectedEmailUlid],
       );
       const row = rows[0];
@@ -62,6 +62,7 @@ export default function ThreadPane() {
         fromName: (row?.['fromName'] as string) ?? '',
         fromAddress: (row?.['fromAddress'] as string) ?? '',
         to: JSON.parse((row?.['toAddresses'] as string) ?? '[]') as string[],
+        cc: JSON.parse((row?.['ccAddresses'] as string) ?? '[]') as string[],
         date: (row?.['receivedAt'] as string) ?? '',
         listUnsubscribe: (row?.['listUnsubscribe'] as string | null) ?? undefined,
         listUnsubscribePost: (row?.['listUnsubscribePost'] as string | null) ?? undefined,

@@ -41,7 +41,7 @@ interface LocalEmail {
 
 export default function InboxPane() {
   const { privateKey, publicKey } = useAuthStore();
-  const { selectedFolderId, selectFolder, openMobileSidebar, threadViewEnabled } = useUiStore();
+  const { selectedFolderId, selectFolder, openMobileSidebar, threadViewEnabled, openAiPanel } = useUiStore();
   const { enabled: indexEnabled, modelReady } = useIndexStore();
   const { folders, deleteFolder } = useFolderStore();
   const { labels } = useLabelStore();
@@ -1390,6 +1390,20 @@ for (const hit of hitMap.values()) {
                 {totalFilterConditions}
               </span>
             )}
+          </button>
+
+          {/* Ask AI */}
+          <button
+            onClick={() => openAiPanel('new')}
+            title="Ask AI about your email"
+            aria-label="Ask AI"
+            className="shrink-0 p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors
+                       dark:text-gray-500 dark:hover:text-blue-400 dark:hover:bg-blue-900/30"
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 3l1.7 4.6L18.3 9.3l-4.6 1.7L12 15.6l-1.7-4.6L5.7 9.3l4.6-1.7L12 3z" />
+              <path d="M19 14l.8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8L19 14z" />
+            </svg>
           </button>
         </div>
       </div>

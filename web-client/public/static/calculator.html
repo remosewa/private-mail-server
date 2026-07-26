@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Feet &amp; Inches Calculator</title>
+</head>
+<body>
+<div id="calc-root"></div>
+<script>
+'use strict';
+
+// ── Feet & Inches Calculator ─────────────────────────────────────────────────
+// Construction-calculator style: you build a dimension in parts — digits, then
+// [ft], digits, then [in], plus a fraction chip — press an operator, enter the
+// next dimension (or a plain number), and the unit logic is automatic:
+//   length × length = area, length × number = length, area ÷ length = length…
+//
+// Fully self-contained (own CSS, no floor-plan State), so the exact same file
+// powers the floating panel in the app AND the standalone calculator.html.
+//
+// Values carry a unit dimension: 0 = number, 1 = length, 2 = area, 3 = volume.
+// Lengths are stored in inches, areas in sq inches, volumes in cu inches.
+
+const CALC_CSS = `
+.fpcalc { width: 276px; background:#16213e; border:1px solid #0f3460; border-radius:10px;
+  box-shadow:0 10px 34px rgba(0,0,0,.5); color:#dde;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; user-select:none; }
+.fpcalc:focus { outline:none; }
+.fpcalc.floating { position:fixed; z-index:2000; }
+.fpcalc-head { display:flex; align-items:center; justify-content:space-between; padding:7px 10px;
+  background:#0f3460; border-radius:9px 9px 0 0; font-size:12px; font-weight:700; color:#e94560; }
+.fpcalc.floating .fpcalc-head { cursor:grab; }
+.fpcalc-close { background:none; border:none; color:#aac; font-size:14px; cursor:pointer; padding:0 2px; }
+.fpcalc-close:hover { color:#fff; }
+.fpcalc-body { padding:10px; }
+.fpcalc-expr { min-height:16px; font-size:12px; color:#88a; text-align:right; padding:0 2px 2px;
+  font-variant-numeric:tabular-nums; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.fpcalc-display { min-height:30px; background:#1a1a2e; border:1px solid #0f3460; border-radius:6px;
+  text-align:right; font-size:19px; font-weight:700; color:#fff; padding:5px 9px;
+  font-variant-numeric:tabular-nums; overflow:hidden; white-space:nowrap; }
+.fpcalc-display.res { color:#7fd4c1; cursor:pointer; }
+.fpcalc-display.err { color:#e94560; font-size:12px; font-weight:400; line-height:2.2; }
+.fpcalc-reps { background:#101a33; border:1px solid #0f3460; border-radius:6px; margin:5px 0 0;
+  font-size:12px; overflow:hidden; }
+.fpcalc-rep { display:flex; justify-content:space-between; gap:8px; padding:4px 8px; cursor:pointer; }
+.fpcalc-rep:hover { background:#0f3460; }
+.fpcalc-rep .lbl { color:#88a; }
+.fpcalc-rep .val { color:#dde; font-variant-numeric:tabular-nums; }
+.fpcalc-chips { display:flex; flex-wrap:wrap; gap:3px; margin:8px 0 6px; }
+.fpcalc-chip { font-size:10px; padding:2px 5px; background:#1a1a2e; border:1px solid #0f3460;
+  border-radius:4px; cursor:pointer; color:#aac; }
+.fpcalc-chip:hover { background:#0f3460; color:#fff; }
+.fpcalc-pad { display:grid; grid-template-columns:repeat(4,1fr); gap:4px; }
+.fpcalc-key { padding:8px 0; background:#1a1a2e; border:1px solid #0f3460; border-radius:6px;
+  color:#dde; font-size:14px; cursor:pointer; text-align:center; }
+.fpcalc-key:hover { background:#0f3460; }
+.fpcalc-key.op { color:#e94560; font-weight:700; }
+.fpcalc-key.unit { background:#0f3460; color:#7fd4c1; font-weight:700; }
+.fpcalc-key.unit:hover { background:#15427a; }
+.fpcalc-key.eq { background:#e94560; border-color:#e94560; color:#fff; font-weight:700; grid-column:span 3; }
+.fpcalc-key.eq:hover { background:#f25873; }
+.fpcalc-hist { max-height:132px; overflow-y:auto; margin-top:8px; border-top:1px solid #0f3460; padding-top:4px; }
+.fpcalc-hist-head { display:flex; justify-content:space-between; font-size:10px; color:#667;
+  text-transform:uppercase; letter-spacing:.5px; padding:2px 0 4px; }
+.fpcalc-hist-clear { background:none; border:none; color:#667; font-size:10px; cursor:pointer; }
+.fpcalc-hist-clear:hover { color:#e94560; }
+.fpcalc-hist-item { display:flex; justify-content:space-between; gap:8px; font-size:11px;
+  padding:3px 2px; cursor:pointer; border-radius:4px; }
+.fpcalc-hist-item:hover { background:#0f3460; }
+.fpcalc-hist-item .he { color:#88a; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.fpcalc-hist-item .hr { color:#7fd4c1; white-space:nowrap; font-variant-numeric:tabular-nums; }
+body.fpcalc-page { margin:0; min-height:100vh; display:flex; align-items:flex-start;
+  justify-content:center; background:#1a1a2e; padding-top:40px; }
+`;
+
+function calcInjectStyles() {
+  if (document.getElementById('fpcalc-style')) return;
+  const st = document.createElement('style');
+  st.id = 'fpcalc-style';
+  st.textContent = CALC_CSS;
+  document.head.appendChild(st);
+}
+
+// ── Unit-aware evaluation over a token list ─────────────────────────────────
+// tokens: {t:'qty', v, dim} | {t:'+'|'-'|'*'|'/'|'('|')'}
+function calcDimName(d) {
+  return ['a number', 'a length', 'an area', 'a volume'][d] || 'that';
+}
+
+function calcEvalTokens(tokens) {
+  if (!tokens.length) throw new Error('Nothing to calculate');
+  let p = 0;
+  const peek = () => tokens[p];
+  const take = () => tokens[p++];
+
+  function expr() {
+    let a = term();
+    while (peek() && (peek().t === '+' || peek().t === '-')) {
+      const op = take().t, b = term();
+      if (a.dim !== b.dim) throw new Error(`Can't ${op === '+' ? 'add' : 'subtract'} ${calcDimName(b.dim)} ${op === '+' ? 'to' : 'from'} ${calcDimName(a.dim)}`);
+      a = { v: op === '+' ? a.v + b.v : a.v - b.v, dim: a.dim };
+    }
+    return a;
+  }
+  function term() {
+    let a = unary();
+    while (peek() && (peek().t === '*' || peek().t === '/')) {
+      const op = take().t, b = unary();
+      if (op === '*') {
+        const dim = a.dim + b.dim;
+        if (dim > 3) throw new Error('Beyond volume — too many lengths multiplied');
+        a = { v: a.v * b.v, dim };
+      } else {
+        if (b.v === 0) throw new Error('Divide by zero');
+        const dim = a.dim - b.dim;
+        if (dim < 0) throw new Error(`Can't divide ${calcDimName(a.dim)} by ${calcDimName(b.dim)}`);
+        a = { v: a.v / b.v, dim };
+      }
+    }
+    return a;
+  }
+  function unary() {
+    if (peek() && peek().t === '-') { take(); const a = unary(); return { v: -a.v, dim: a.dim }; }
+    return primary();
+  }
+  function primary() {
+    const t = take();
+    if (!t) throw new Error('Expression is incomplete');
+    if (t.t === '(') {
+      const a = expr();
+      const c = take();
+      if (!c || c.t !== ')') throw new Error('Missing )');
+      return a;
+    }
+    if (t.t === 'qty') return { v: t.v, dim: t.dim };
+    throw new Error(`Unexpected "${t.t}"`);
+  }
+
+  const r = expr();
+  if (p < tokens.length) throw new Error('Malformed expression');
+  return r;
+}
+
+// String form kept for tests / power users; the UI builds tokens directly.
+function calcTokenize(str) {
+  const s = str.replace(/[×✕]/g, '*').replace(/÷/g, '/').replace(/[’′]/g, "'").replace(/[”″]/g, '"');
+  const tokens = [];
+  let i = 0;
+  const R_FT = /^(\d+(?:\.\d+)?)\s*'\s*(?:(?:(\d+)\s+)?(\d+)\/(\d+)\s*"|(\d+(?:\.\d+)?)\s*")?/;
+  const R_IN_FRAC = /^(?:(\d+)\s+)?(\d+)\/(\d+)\s*"/;
+  const R_IN_DEC  = /^(\d+(?:\.\d+)?)\s*"/;
+  const R_NUM     = /^(\d+(?:\.\d+)?)/;
+  while (i < s.length) {
+    const rest = s.slice(i);
+    const ws = /^\s+/.exec(rest);
+    if (ws) { i += ws[0].length; continue; }
+    let m;
+    if ((m = R_FT.exec(rest))) {
+      let inches = parseFloat(m[1]) * 12;
+      if (m[3]) inches += (m[2] ? parseInt(m[2], 10) : 0) + parseInt(m[3], 10) / parseInt(m[4], 10);
+      else if (m[5] != null) inches += parseFloat(m[5]);
+      tokens.push({ t: 'qty', v: inches, dim: 1 }); i += m[0].length; continue;
+    }
+    if ((m = R_IN_FRAC.exec(rest))) {
+      tokens.push({ t: 'qty', v: (m[1] ? parseInt(m[1], 10) : 0) + parseInt(m[2], 10) / parseInt(m[3], 10), dim: 1 });
+      i += m[0].length; continue;
+    }
+    if ((m = R_IN_DEC.exec(rest))) { tokens.push({ t: 'qty', v: parseFloat(m[1]), dim: 1 }); i += m[0].length; continue; }
+    if ((m = R_NUM.exec(rest)))    { tokens.push({ t: 'qty', v: parseFloat(m[1]), dim: 0 }); i += m[0].length; continue; }
+    const c = s[i];
+    if ('+-*/()'.includes(c)) { tokens.push({ t: c }); i++; continue; }
+    throw new Error(`Unexpected "${c}"`);
+  }
+  return tokens;
+}
+
+function calcEvaluate(str) { return calcEvalTokens(calcTokenize(str)); }
+
+// ── Formatting ──────────────────────────────────────────────────────────────
+function calcNum(x, dp = 4) {
+  return String(parseFloat(x.toFixed(dp)));
+}
+
+function calcFrac16(inches) {
+  const sign = inches < 0 ? '-' : '';
+  const total = Math.abs(inches) * 16;
+  const r = Math.round(total);
+  const exact = Math.abs(total - r) < 1e-6;
+  let whole = Math.floor(r / 16), num = r % 16, den = 16;
+  while (num && num % 2 === 0) { num /= 2; den /= 2; }
+  return { sign, whole, num, den, exact };
+}
+
+function calcFmtInFrac(inches) {
+  const f = calcFrac16(inches);
+  const frac = f.num ? (f.whole ? `${f.whole} ${f.num}/${f.den}` : `${f.num}/${f.den}`) : `${f.whole}`;
+  return `${f.exact ? '' : '≈ '}${f.sign}${frac}"`;
+}
+
+function calcFmtFtIn(inches) {
+  const f = calcFrac16(inches);
+  const ft = Math.floor(f.whole / 12);
+  const inWhole = f.whole % 12;
+  const pre = f.exact ? '' : '≈ ';
+  const fracStr = f.num ? `${f.num}/${f.den}` : '';
+  if (!ft) {
+    if (f.num) return `${pre}${f.sign}${inWhole ? inWhole + ' ' : ''}${fracStr}"`;
+    return `${pre}${f.sign}${inWhole}"`;
+  }
+  let inPart = '';
+  if (inWhole && f.num) inPart = ` ${inWhole} ${fracStr}"`;
+  else if (inWhole) inPart = ` ${inWhole}"`;
+  else if (f.num) inPart = ` ${fracStr}"`;
+  return `${pre}${f.sign}${ft}'${inPart}`;
+}
+
+function calcPrimary(val) {
+  if (val.dim === 0) return calcNum(val.v, 6);
+  if (val.dim === 1) return calcFmtFtIn(val.v);
+  if (val.dim === 2) return `${calcNum(val.v / 144, 3)} sq ft`;
+  return `${calcNum(val.v / 1728, 3)} cu ft`;
+}
+
+// Representation list for a value; each row carries the numeric value it shows
+// (fraction rows are the rounded-to-1/16 value) so a click can continue with it.
+function calcReps(val) {
+  if (val.dim === 1) {
+    const v16 = Math.round(val.v * 16) / 16;
+    return [
+      { lbl: 'feet & inches', val: calcFmtFtIn(val.v), v: v16, dim: 1 },
+      { lbl: 'inches (fraction)', val: calcFmtInFrac(val.v), v: v16, dim: 1 },
+      { lbl: 'inches (decimal)', val: `${calcNum(val.v)}"`, v: val.v, dim: 1 },
+      { lbl: 'feet (decimal)', val: `${calcNum(val.v / 12)}'`, v: val.v, dim: 1 },
+    ];
+  }
+  if (val.dim === 2) {
+    return [
+      { lbl: 'square feet', val: `${calcNum(val.v / 144, 3)} sq ft`, v: val.v, dim: 2 },
+      { lbl: 'square inches', val: `${calcNum(val.v, 2)} sq in`, v: val.v, dim: 2 },
+      { lbl: 'square yards', val: `${calcNum(val.v / 1296, 3)} sq yd`, v: val.v, dim: 2 },
+    ];
+  }
+  if (val.dim === 3) {
+    return [
+      { lbl: 'cubic feet', val: `${calcNum(val.v / 1728, 3)} cu ft`, v: val.v, dim: 3 },
+      { lbl: 'cubic inches', val: `${calcNum(val.v, 1)} cu in`, v: val.v, dim: 3 },
+    ];
+  }
+  return [{ lbl: 'number', val: calcNum(val.v, 6), v: val.v, dim: 0 }];
+}
+
+// ── UI ──────────────────────────────────────────────────────────────────────
+function initCalculator(root, opts = {}) {
+  calcInjectStyles();
+  const floating = !!opts.floating;
+  root.classList.add('fpcalc');
+  if (floating) root.classList.add('floating');
+  root.tabIndex = 0;
+  root.innerHTML = '';
+
+  let history = [];
+  try { history = JSON.parse(localStorage.getItem('fpcalc_history') || '[]'); } catch (_) {}
+
+  // Committed tokens + the dimension entry being built in parts
+  let tokens = [];
+  const freshEntry = () => ({ digits: '', feet: null, inches: null, frac: null });
+  let entry = freshEntry();
+  let resultVal = null;     // last '=' result — operators continue from it
+  let lastExpr = '';        // display string of the evaluated expression
+  let justEvaluated = false;
+  let errMsg = null;
+
+  // Header
+  const head = document.createElement('div');
+  head.className = 'fpcalc-head';
+  head.innerHTML = `<span>🧮 Feet &amp; Inches</span>`;
+  if (opts.onClose) {
+    const x = document.createElement('button');
+    x.className = 'fpcalc-close';
+    x.textContent = '✕';
+    x.addEventListener('click', opts.onClose);
+    head.appendChild(x);
+  }
+  root.appendChild(head);
+
+  const body = document.createElement('div');
+  body.className = 'fpcalc-body';
+  root.appendChild(body);
+
+  const exprLine = document.createElement('div');
+  exprLine.className = 'fpcalc-expr';
+  body.appendChild(exprLine);
+
+  const display = document.createElement('div');
+  display.className = 'fpcalc-display';
+  body.appendChild(display);
+
+  const reps = document.createElement('div');
+  reps.className = 'fpcalc-reps';
+  reps.hidden = true;
+  body.appendChild(reps);
+
+  // Fraction chips — common dimensions down to 1/16"
+  const chips = document.createElement('div');
+  chips.className = 'fpcalc-chips';
+  [[1, 16], [1, 8], [3, 16], [1, 4], [5, 16], [3, 8], [7, 16], [1, 2], [9, 16], [5, 8], [11, 16], [3, 4], [13, 16], [7, 8], [15, 16]]
+    .forEach(([n, d]) => {
+      const c = document.createElement('button');
+      c.className = 'fpcalc-chip';
+      c.textContent = `${n}/${d}`;
+      c.addEventListener('click', () => { pressChip(n, d); root.focus(); });
+      chips.appendChild(c);
+    });
+  body.appendChild(chips);
+
+  // Keypad
+  const pad = document.createElement('div');
+  pad.className = 'fpcalc-pad';
+  const keys = [
+    ['C', 'op', () => { tokens = []; entry = freshEntry(); resultVal = null; lastExpr = ''; justEvaluated = false; errMsg = null; update(); }],
+    ['(', 'op', () => pressParen('(')],
+    [')', 'op', () => pressParen(')')],
+    ['⌫', 'op', pressBack],
+    ['7', '', () => pressDigit('7')], ['8', '', () => pressDigit('8')], ['9', '', () => pressDigit('9')], ['÷', 'op', () => pressOp('/')],
+    ['4', '', () => pressDigit('4')], ['5', '', () => pressDigit('5')], ['6', '', () => pressDigit('6')], ['×', 'op', () => pressOp('*')],
+    ['1', '', () => pressDigit('1')], ['2', '', () => pressDigit('2')], ['3', '', () => pressDigit('3')], ['−', 'op', () => pressOp('-')],
+    ['0', '', () => pressDigit('0')], ['.', '', () => pressDigit('.')], ['ft', 'unit', pressFt], ['+', 'op', () => pressOp('+')],
+    ['in', 'unit', pressIn], ['=', 'eq', pressEq],
+  ];
+  for (const [label, cls, fn] of keys) {
+    const k = document.createElement('button');
+    k.className = 'fpcalc-key' + (cls ? ' ' + cls : '');
+    k.textContent = label;
+    k.addEventListener('click', () => { fn(); root.focus(); });
+    pad.appendChild(k);
+  }
+  body.appendChild(pad);
+
+  const hist = document.createElement('div');
+  hist.className = 'fpcalc-hist';
+  body.appendChild(hist);
+
+  // ── Entry model ───────────────────────────────────────────────────────────
+  const entryIsLen = () => entry.feet != null || entry.inches != null || entry.frac != null;
+
+  function entryValue() {
+    if (entryIsLen()) {
+      const extraIn = entry.digits ? parseFloat(entry.digits) : 0;   // digits after [ft] are inches
+      const v = (entry.feet ?? 0) * 12 + (entry.inches ?? 0) + extraIn
+        + (entry.frac ? entry.frac.n / entry.frac.d : 0);
+      return { v, dim: 1 };
+    }
+    if (entry.digits) return { v: parseFloat(entry.digits), dim: 0 };
+    return null;
+  }
+
+  function entryDisplay() {
+    if (!entryIsLen()) return entry.digits;
+    let s = entry.feet != null ? `${entry.feet}'` : '';
+    const inch = entry.inches != null ? entry.inches : (entry.digits !== '' ? entry.digits : null);
+    const fr = entry.frac ? `${entry.frac.n}/${entry.frac.d}` : '';
+    if (inch != null && fr) s += ` ${inch} ${fr}"`;
+    else if (inch != null) s += entry.inches != null ? ` ${inch}"` : ` ${inch}`; // bare while typing
+    else if (fr) s += ` ${fr}"`;
+    return s.trim();
+  }
+
+  // ── Key behaviors ─────────────────────────────────────────────────────────
+  function startFreshIfNeeded() {
+    // Typing right after '=' starts a new calculation
+    if (justEvaluated) { resultVal = null; lastExpr = ''; justEvaluated = false; }
+    errMsg = null;
+  }
+
+  function pressDigit(d) {
+    startFreshIfNeeded();
+    if (entry.inches != null || entry.frac) return;   // value complete — press an operator
+    if (d === '.' && entry.digits.includes('.')) return;
+    entry.digits += d;
+    update();
+  }
+
+  function pressFt() {
+    startFreshIfNeeded();
+    if (!entry.digits || entry.feet != null || entry.inches != null || entry.frac) return;
+    entry.feet = parseFloat(entry.digits);
+    entry.digits = '';
+    update();
+  }
+
+  function pressIn() {
+    startFreshIfNeeded();
+    if (!entry.digits || entry.inches != null || entry.frac) return;
+    entry.inches = parseFloat(entry.digits);
+    entry.digits = '';
+    update();
+  }
+
+  function pressChip(n, d) {
+    startFreshIfNeeded();
+    if (entry.digits) { entry.inches = parseFloat(entry.digits); entry.digits = ''; } // 3 + chip → 3 1/2"
+    entry.frac = { n, d };
+    update();
+  }
+
+  function pressOp(op) {
+    errMsg = null;
+    const v = entryValue();
+    if (v) { tokens.push({ t: 'qty', ...v }); entry = freshEntry(); }
+    else if (!tokens.length && resultVal) { tokens.push({ t: 'qty', ...resultVal }); } // continue from result
+    justEvaluated = false;
+    const last = tokens[tokens.length - 1];
+    if (!last || last.t === '(') return update();       // leading minus etc. not supported — ignore
+    if ('+-*/'.includes(last.t)) tokens[tokens.length - 1] = { t: op }; // change your mind
+    else tokens.push({ t: op });
+    update();
+  }
+
+  function pressParen(p) {
+    errMsg = null;
+    justEvaluated = false;
+    if (p === '(') {
+      if (entryValue()) return;   // needs an operator first
+      tokens.push({ t: '(' });
+    } else {
+      const v = entryValue();
+      if (v) { tokens.push({ t: 'qty', ...v }); entry = freshEntry(); }
+      tokens.push({ t: ')' });
+    }
+    update();
+  }
+
+  function pressBack() {
+    errMsg = null;
+    justEvaluated = false;
+    if (entry.digits) entry.digits = entry.digits.slice(0, -1);
+    else if (entry.frac) entry.frac = null;
+    else if (entry.inches != null) { entry.digits = String(entry.inches); entry.inches = null; }
+    else if (entry.feet != null) { entry.digits = String(entry.feet); entry.feet = null; }
+    else if (tokens.length) tokens.pop();
+    update();
+  }
+
+  function pressEq() {
+    errMsg = null;
+    const v = entryValue();
+    if (v) { tokens.push({ t: 'qty', ...v }); entry = freshEntry(); }
+    if (!tokens.length) return;
+    if ('+-*/'.includes(tokens[tokens.length - 1].t)) tokens.pop();  // trailing operator
+    try {
+      const r = calcEvalTokens(tokens);
+      lastExpr = tokensDisplay(tokens);
+      resultVal = r;
+      justEvaluated = true;
+      history.unshift({ expr: lastExpr, disp: calcPrimary(r), v: r.v, dim: r.dim });
+      history = history.slice(0, 30);
+      try { localStorage.setItem('fpcalc_history', JSON.stringify(history)); } catch (_) {}
+      tokens = [];
+      renderHistory();
+    } catch (err) {
+      errMsg = err.message;
+    }
+    update();
+  }
+
+  // ── Rendering ─────────────────────────────────────────────────────────────
+  const OP_GLYPH = { '*': '×', '/': '÷', '+': '+', '-': '−', '(': '(', ')': ')' };
+  function tokensDisplay(tks) {
+    return tks.map(t => t.t === 'qty' ? calcPrimary({ v: t.v, dim: t.dim }) : OP_GLYPH[t.t]).join(' ');
+  }
+
+  function update() {
+    reps.hidden = true;
+    if (errMsg) {
+      exprLine.textContent = tokensDisplay(tokens);
+      display.className = 'fpcalc-display err';
+      display.textContent = errMsg;
+      return;
+    }
+    if (justEvaluated && resultVal) {
+      exprLine.textContent = lastExpr + ' =';
+      display.className = 'fpcalc-display res';
+      display.title = 'Click for other representations';
+      display.textContent = calcPrimary(resultVal);
+      return;
+    }
+    exprLine.textContent = tokensDisplay(tokens);
+    display.className = 'fpcalc-display';
+    display.title = '';
+    display.textContent = entryDisplay() || '0';
+  }
+
+  // Click the result → all representations; click a row to continue with it
+  display.addEventListener('click', () => {
+    if (!(justEvaluated && resultVal)) return;
+    if (!reps.hidden) { reps.hidden = true; return; }
+    reps.innerHTML = '';
+    for (const r of calcReps(resultVal)) {
+      const row = document.createElement('div');
+      row.className = 'fpcalc-rep';
+      row.title = 'Click to continue with this value';
+      row.innerHTML = `<span class="lbl">${r.lbl}</span><span class="val">${r.val}</span>`;
+      row.addEventListener('click', e => {
+        e.stopPropagation();
+        resultVal = { v: r.v, dim: r.dim };
+        justEvaluated = true;
+        update();
+      });
+      reps.appendChild(row);
+    }
+    reps.hidden = false;
+  });
+
+  function renderHistory() {
+    hist.innerHTML = '';
+    if (!history.length) return;
+    const hh = document.createElement('div');
+    hh.className = 'fpcalc-hist-head';
+    hh.innerHTML = '<span>History</span>';
+    const clr = document.createElement('button');
+    clr.className = 'fpcalc-hist-clear';
+    clr.textContent = 'clear';
+    clr.addEventListener('click', () => {
+      history = [];
+      try { localStorage.removeItem('fpcalc_history'); } catch (_) {}
+      renderHistory();
+    });
+    hh.appendChild(clr);
+    hist.appendChild(hh);
+    for (const h of history) {
+      const it = document.createElement('div');
+      it.className = 'fpcalc-hist-item';
+      it.title = 'Click to continue with this result';
+      it.innerHTML = `<span class="he">${h.expr}</span><span class="hr">${h.disp}</span>`;
+      it.addEventListener('click', () => {
+        if (h.v == null) return;
+        tokens = []; entry = freshEntry();
+        resultVal = { v: h.v, dim: h.dim || 0 };
+        lastExpr = h.expr;
+        justEvaluated = true;
+        errMsg = null;
+        update();
+        root.focus();
+      });
+      hist.appendChild(it);
+    }
+  }
+
+  // Keyboard: digits, ops, Enter, Backspace, f/' = ft, i/" = in
+  root.addEventListener('keydown', e => {
+    e.stopPropagation();
+    const k = e.key;
+    if (/^[0-9.]$/.test(k)) pressDigit(k);
+    else if (k === '+') pressOp('+');
+    else if (k === '-') pressOp('-');
+    else if (k === '*' || k.toLowerCase() === 'x') pressOp('*');
+    else if (k === '/') pressOp('/');
+    else if (k === 'Enter' || k === '=') { e.preventDefault(); pressEq(); }
+    else if (k === 'Backspace') { e.preventDefault(); pressBack(); }
+    else if (k === "'" || k.toLowerCase() === 'f') pressFt();
+    else if (k === '"' || k.toLowerCase() === 'i') pressIn();
+    else if (k === '(' || k === ')') pressParen(k);
+    else if (k === 'Escape') reps.hidden = true;
+  });
+  root.addEventListener('pointerdown', () => root.focus());
+
+  // Dragging (floating mode)
+  if (floating) {
+    let drag = null;
+    try {
+      const pos = JSON.parse(localStorage.getItem('fpcalc_pos') || 'null');
+      if (pos) { root.style.left = pos.left + 'px'; root.style.top = pos.top + 'px'; }
+      else { root.style.right = '20px'; root.style.top = '60px'; }
+    } catch (_) { root.style.right = '20px'; root.style.top = '60px'; }
+    head.addEventListener('pointerdown', e => {
+      if (e.target.classList.contains('fpcalc-close')) return;
+      const r = root.getBoundingClientRect();
+      drag = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+      root.style.right = '';
+      head.setPointerCapture(e.pointerId);
+    });
+    head.addEventListener('pointermove', e => {
+      if (!drag) return;
+      const left = Math.max(0, Math.min(window.innerWidth - 80, e.clientX - drag.dx));
+      const top = Math.max(0, Math.min(window.innerHeight - 40, e.clientY - drag.dy));
+      root.style.left = left + 'px';
+      root.style.top = top + 'px';
+    });
+    head.addEventListener('pointerup', () => {
+      if (!drag) return;
+      drag = null;
+      try {
+        localStorage.setItem('fpcalc_pos', JSON.stringify({ left: parseInt(root.style.left) || 0, top: parseInt(root.style.top) || 0 }));
+      } catch (_) {}
+    });
+  }
+
+  renderHistory();
+  update();
+  return { focus: () => root.focus() };
+}
+
+// Floating window used by the floor-plan toolbar
+let _calcWin = null;
+function toggleCalcWindow() {
+  if (_calcWin) {
+    _calcWin.style.display = _calcWin.style.display === 'none' ? '' : 'none';
+    return;
+  }
+  _calcWin = document.createElement('div');
+  document.body.appendChild(_calcWin);
+  initCalculator(_calcWin, { floating: true, onClose: () => { _calcWin.style.display = 'none'; } });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.body.classList.add('fpcalc-page');
+  initCalculator(document.getElementById('calc-root'), { floating: false });
+});
+</script>
+</body>
+</html>

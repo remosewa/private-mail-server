@@ -12,6 +12,9 @@ web-client/.env
 web-client/.env.local
 web-client/.env.*.local
 
+# Windows/WSL alternate-data-stream junk (mark-of-the-web)
+*:Zone.Identifier
+
 # Personal/IDE config
 .kiro/
 .vscode/

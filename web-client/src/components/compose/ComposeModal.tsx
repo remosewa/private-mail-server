@@ -325,7 +325,7 @@ export default function ComposePane() {
         .map(a => ({
           filename:     a.name,
           size:         a.size,
-          contentType:  a.type,
+          contentType:  a.type || 'application/octet-stream',
           attachmentId: a.attachmentId!,
         }));
 
@@ -656,7 +656,9 @@ export default function ComposePane() {
       file:         f,
       name:         f.name,
       size:         f.size,
-      type:         f.type,
+      // Unknown extensions (custom formats) have an empty File.type — an empty
+      // Content-Type later breaks MIME assembly at send time
+      type:         f.type || 'application/octet-stream',
       attachmentId: null,
       status:       'uploading',
       progress:     0,

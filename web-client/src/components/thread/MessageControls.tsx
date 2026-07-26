@@ -322,9 +322,11 @@ export default function MessageControls({ emailUlid, compact = false }: Props) {
           </button>
 
           {dropdownOpen && (
-            <div className="absolute right-0 top-full mt-1 z-50 min-w-[180px] bg-white dark:bg-gray-800
-                            border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg py-1 overflow-hidden
-                            max-h-[300px] overflow-y-auto">
+            <div className="max-md:fixed max-md:inset-x-3 max-md:bottom-3 max-md:max-h-[60vh] max-md:shadow-2xl
+                            md:absolute md:right-0 md:top-full md:mt-1 md:min-w-[180px] md:max-h-[300px]
+                            z-50 bg-white dark:bg-gray-800
+                            border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg py-1
+                            overflow-y-auto">
               {error && (
                 <div className="px-3 py-2 text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border-b border-red-200 dark:border-red-800">
                   {error}
@@ -483,9 +485,11 @@ export default function MessageControls({ emailUlid, compact = false }: Props) {
         </button>
 
         {dropdownOpen && (
-          <div className="absolute left-0 top-full mt-1 z-50 min-w-[180px] bg-white dark:bg-gray-800
-                          border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg py-1 overflow-hidden
-                          max-h-[300px] overflow-y-auto">
+          <div className="max-md:fixed max-md:inset-x-3 max-md:bottom-3 max-md:max-h-[60vh] max-md:shadow-2xl
+                          md:absolute md:left-0 md:top-full md:mt-1 md:min-w-[180px] md:max-h-[300px]
+                          z-50 bg-white dark:bg-gray-800
+                          border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg py-1
+                          overflow-y-auto">
             {systemFolders.map(folder => (
               <button
                 key={folder.id}

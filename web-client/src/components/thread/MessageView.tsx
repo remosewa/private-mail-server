@@ -14,6 +14,7 @@ interface Props {
     fromName: string;
     fromAddress: string;
     to: string[];
+    cc?: string[];
     date: string;
     listUnsubscribe?: string;
     listUnsubscribePost?: string;
@@ -210,7 +211,23 @@ useEffect(() => {
     // when the CSS filter is applied to the iframe element in dark mode.
     const style = doc.createElement('style');
     style.id = 'chase-dark-mode';
-    style.textContent = `img, video, svg { filter: invert(1) hue-rotate(180deg); }`;
+    style.textContent = `
+      img, video, svg { filter: invert(1) hue-rotate(180deg); }
+
+      /* On narrow screens, deeply nested reply quotes compound their left
+         indentation until the text column is unreadable. Flatten each level to a
+         small fixed indent (keeping a subtle border to still convey quoting) so
+         the body stays legible no matter how long the thread is. !important is
+         required to beat the inline margins emitted by mail clients. */
+      @media (max-width: 600px) {
+        blockquote {
+          margin-left: 0 !important;
+          margin-right: 0 !important;
+          padding-left: 0.6em !important;
+          border-left: 2px solid rgba(128, 128, 128, 0.4) !important;
+        }
+      }
+    `;
     doc.head.appendChild(style);
 
     // Resize to content
@@ -237,10 +254,30 @@ useEffect(() => {
 }, [safeHtml]);  // darkMode is applied via CSS filter on the iframe element, not via injection
 
 
+  /** True when viewing a message the current user sent (e.g. in Sent or a thread). */
+  const isOwnMessage = !!userEmail && header.fromAddress.toLowerCase() === userEmail.toLowerCase();
+
+  /** Dedupe addresses case-insensitively, dropping the current user's own address. */
+  function dedupeAddresses(addresses: string[]): string[] {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const a of addresses) {
+      const key = a.trim().toLowerCase();
+      if (!key || key === userEmail?.toLowerCase()) continue;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(a.trim());
+    }
+    return out;
+  }
+
   function handleReply() {
+    // Replying to your own message continues the conversation with its
+    // recipients — not with yourself.
+    const to = isOwnMessage ? dedupeAddresses(header.to).join(', ') : header.fromAddress;
     openCompose({
       type: 'reply',
-      to: header.fromAddress,
+      to,
       subject: header.subject,
       fromName: header.fromName,
       fromAddress: header.fromAddress,
@@ -251,14 +288,23 @@ useEffect(() => {
   }
 
   function handleReplyAll() {
-    // To = original sender; Cc = all other recipients excluding the current user
-    const ccAddresses = header.to
-      .filter(a => a !== header.fromAddress && a !== userEmail)
-      .join(', ');
+    let to: string;
+    let cc: string;
+    if (isOwnMessage) {
+      // Own message: keep the original recipient lists as-is
+      to = dedupeAddresses(header.to).join(', ');
+      cc = dedupeAddresses(header.cc ?? []).join(', ');
+    } else {
+      // Received message: To = sender; Cc = everyone else on the thread
+      to = header.fromAddress;
+      cc = dedupeAddresses([...header.to, ...(header.cc ?? [])])
+        .filter(a => a.toLowerCase() !== header.fromAddress.toLowerCase())
+        .join(', ');
+    }
     openCompose({
       type: 'replyAll',
-      to: header.fromAddress,
-      cc: ccAddresses,
+      to,
+      cc,
       subject: header.subject,
       fromName: header.fromName,
       fromAddress: header.fromAddress,

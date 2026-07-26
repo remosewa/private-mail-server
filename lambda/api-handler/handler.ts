@@ -62,6 +62,8 @@ import { listFilters, getFilter, putFilter, deleteFilter } from './routes/filter
 import { handleGetSettings, handlePutSettings } from './routes/settings';
 import { handleAdminListUsers, handleAdminCreateInvite, handleAdminListInvites, handleAdminInvalidateInvite } from './routes/admin';
 import { handleClientLogs } from './routes/logs';
+import { handleCreateCall, handleJoinCall, handleEndCall, handleScheduleCall } from './routes/calls';
+import { handleAiConfig } from './routes/ai';
 
 export const handler = async (
   event: APIGatewayProxyEventV2,
@@ -120,6 +122,11 @@ export const handler = async (
       case 'GET /admin/invites':                                   return await handleAdminListInvites(event);
       case 'DELETE /admin/invites/{inviteCode}':                   return await handleAdminInvalidateInvite(event);
       case 'POST /client-logs':                                    return await handleClientLogs(event);
+      case 'POST /calls':                                          return await handleCreateCall(event);
+      case 'POST /calls/schedule':                                 return await handleScheduleCall(event);
+      case 'GET /calls/{callId}/join':                             return await handleJoinCall(event);
+      case 'DELETE /calls/{callId}':                               return await handleEndCall(event);
+      case 'GET /ai/config':                                       return await handleAiConfig(event);
       default:
         return { statusCode: 404, body: 'Not Found' };
     }

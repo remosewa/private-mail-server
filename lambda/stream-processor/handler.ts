@@ -1,5 +1,5 @@
 /**
- * DynamoDB Streams processor — cleans up S3 objects when email items are removed.
+ * DynamoDB Streams processor — cleans up external resources when items are removed.
  *
  * Trigger: DynamoDB Streams on the emails table (OLD_IMAGE view).
  *
@@ -7,6 +7,8 @@
  * For each deleted EMAIL# item, the following S3 objects are deleted:
  *   - s3HeaderKey, s3BodyKey, s3TextKey, s3EmbeddingKey, s3AttachmentsKey
  *   - All attachment binaries under {userId}/attachments/{ulid}/
+ * For each deleted CALL# record (24h TTL), the Chime meeting is deleted —
+ * the hard backstop that guarantees no video call can outlive its record.
  */
 
 import type { DynamoDBStreamEvent } from 'aws-lambda';
@@ -16,10 +18,12 @@ import {
   DeleteObjectsCommand,
   ListObjectsV2Command,
 } from '@aws-sdk/client-s3';
+import { ChimeSDKMeetingsClient, DeleteMeetingCommand } from '@aws-sdk/client-chime-sdk-meetings';
 import { unmarshall } from '@aws-sdk/util-dynamodb';
 import type { AttributeValue } from '@aws-sdk/client-dynamodb';
 
 const s3 = new S3Client({});
+const chime = new ChimeSDKMeetingsClient({});
 const USER_DATA_BUCKET = process.env.USER_DATA_BUCKET_NAME!;
 
 export const handler = async (event: DynamoDBStreamEvent): Promise<void> => {
@@ -30,9 +34,24 @@ export const handler = async (event: DynamoDBStreamEvent): Promise<void> => {
     if (!oldImage) continue;
 
     const item = unmarshall(oldImage as Record<string, AttributeValue>);
+    const sk = item['SK'] as string | undefined;
+
+    // Expired video call record → end any still-running Chime meeting
+    if (sk === 'CALL') {
+      const meetingId = item['meetingId'] as string | undefined;
+      if (meetingId) {
+        await chime.send(new DeleteMeetingCommand({ MeetingId: meetingId }))
+          .catch(err => {
+            // NotFound is the normal case (meeting already ended on its own)
+            if ((err as { name?: string }).name !== 'NotFoundException') {
+              console.error(`[stream-processor] Failed to delete meeting ${meetingId}:`, err);
+            }
+          });
+      }
+      continue;
+    }
 
     // Only process EMAIL# items (skip COUNTS, PUSH#, etc.)
-    const sk = item['SK'] as string | undefined;
     if (!sk?.startsWith('EMAIL#')) continue;
 
     const pk = item['PK'] as string | undefined; // USER#<userId>

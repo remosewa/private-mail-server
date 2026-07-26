@@ -41,10 +41,13 @@
     "typescript": "~5.9.3"
   },
   "dependencies": {
+    "@anthropic-ai/bedrock-sdk": "^0.32.0",
+    "@aws-sdk/client-chime-sdk-meetings": "^3.1081.0",
     "@aws-sdk/lib-dynamodb": "^3.1004.0",
     "@smithy/node-http-handler": "^4.4.14",
     "@tanstack/react-virtual": "^3.13.19",
     "aws-cdk-lib": "^2.240.0",
+    "aws-jwt-verify": "^5.2.1",
     "constructs": "^10.5.0",
     "imap-simple": "^5.1.0",
     "mailparser": "^3.9.4",

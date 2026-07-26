@@ -10,6 +10,8 @@ import { useFilterStore } from '../../store/filterStore';
 import { cancelFilterExecution } from '../../sync/filterExecutor';
 import { deletePrivateKey } from '../../db/KeyStore';
 import { SyncManager } from '../../sync/SyncManager';
+import { createCall } from '../../api/calls';
+import ScheduleMeetingModal from '../call/ScheduleMeetingModal';
 
 const SYSTEM_FOLDERS = [
   { id: 'INBOX',   label: 'Inbox'   },
@@ -23,7 +25,7 @@ const SYSTEM_FOLDERS = [
 const FOLDERS_COLLAPSE_THRESHOLD = 5;
 
 export default function Sidebar() {
-  const { selectedFolderId, selectFolder, openCompose, setActivePage, closeMobileSidebar } = useUiStore();
+  const { selectedFolderId, selectFolder, openCompose, setActivePage, closeMobileSidebar, openAiPanel, aiPanel } = useUiStore();
   const { userId, clearAuth, privateKey, publicKey } = useAuthStore();
   const {
     folders, loaded, loadFolders,
@@ -48,6 +50,25 @@ export default function Sidebar() {
 
   // ── Collapse state ───────────────────────────────────────────────────────
   const [foldersExpanded, setFoldersExpanded] = useState(false);
+
+  // ── Video call ───────────────────────────────────────────────────────────
+  const [startingCall, setStartingCall] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+
+  async function startVideoCall() {
+    if (startingCall) return;
+    setStartingCall(true);
+    try {
+      const { callId, hostToken } = await createCall();
+      // Host token travels in the fragment (never sent to the server); the
+      // call page moves it into sessionStorage and strips it from the URL.
+      window.open(`/call/${callId}#ht=${hostToken}`, '_blank');
+    } catch (err) {
+      console.error('Failed to start video call:', err);
+    } finally {
+      setStartingCall(false);
+    }
+  }
 
   const queryClient = useQueryClient();
 
@@ -208,6 +229,34 @@ export default function Sidebar() {
                      font-medium rounded-lg transition-colors"
         >
           Compose
+        </button>
+        {/* Start video call */}
+        <button
+          onClick={() => { void startVideoCall(); }}
+          disabled={startingCall}
+          title="Start video call"
+          aria-label="Start video call"
+          className="p-2 text-gray-500 hover:bg-gray-200 hover:text-gray-700 rounded-lg transition-colors
+                     disabled:opacity-50 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+        >
+          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polygon points="23 7 16 12 23 17 23 7" />
+            <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+          </svg>
+        </button>
+        {/* Schedule a meeting for later */}
+        <button
+          onClick={() => setScheduleOpen(true)}
+          title="Schedule a meeting"
+          aria-label="Schedule a meeting"
+          className="p-2 text-gray-500 hover:bg-gray-200 hover:text-gray-700 rounded-lg transition-colors
+                     dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+        >
+          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+            <line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" />
+            <line x1="3" y1="10" x2="21" y2="10" />
+          </svg>
         </button>
         {/* Close button — only shown on mobile */}
         <button
@@ -431,6 +480,20 @@ export default function Sidebar() {
           </div>
         )}
 
+        {/* AI Chats — on-device Ask AI conversation history */}
+        <button
+          onClick={() => { openAiPanel('history'); closeMobileSidebar(); }}
+          className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors flex items-center gap-2 ${aiPanel === 'history'
+            ? 'bg-blue-100 text-blue-700 font-medium dark:bg-blue-900/40 dark:text-blue-200'
+            : 'text-gray-700 hover:bg-gray-200 dark:text-gray-200 dark:hover:bg-gray-800'
+            }`}
+        >
+          <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 3l1.7 4.6L18.3 9.3l-4.6 1.7L12 15.6l-1.7-4.6L5.7 9.3l4.6-1.7L12 3z" />
+          </svg>
+          <span>AI Chats</span>
+        </button>
+
         {/* Remaining system folders */}
         {SYSTEM_FOLDERS.filter(f => f.id !== 'INBOX').map(({ id, label }) => (
           <button
@@ -553,6 +616,8 @@ export default function Sidebar() {
           </button>
         </div>
       </div>
+
+      {scheduleOpen && <ScheduleMeetingModal onClose={() => setScheduleOpen(false)} />}
     </aside>
   );
 }

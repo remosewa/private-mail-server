@@ -36,6 +36,8 @@ interface UiState {
   darkMode: boolean;
   threadViewEnabled: boolean;
   mobileSidebarOpen: boolean;
+  /** Ask AI panel: closed, a fresh chat, or the on-device chat history list. */
+  aiPanel: 'closed' | 'new' | 'history';
 
   selectFolder(folderId: string): void;
   selectEmail(ulid: string | null): void;
@@ -48,6 +50,8 @@ interface UiState {
   setThreadViewEnabled(enabled: boolean): void;
   openMobileSidebar(): void;
   closeMobileSidebar(): void;
+  openAiPanel(view: 'new' | 'history'): void;
+  closeAiPanel(): void;
 }
 
 const DARK_MODE_STORAGE_KEY = 'chase-email-dark-mode';
@@ -83,6 +87,7 @@ export const useUiStore = create<UiState>(set => ({
   darkMode: readInitialDarkMode(),
   threadViewEnabled: readInitialThreadView(),
   mobileSidebarOpen: false,
+  aiPanel: 'closed',
 
   selectFolder: (folderId) =>
     set({ selectedFolderId: folderId, selectedEmailUlid: null, mobileSidebarOpen: false }),
@@ -121,4 +126,7 @@ export const useUiStore = create<UiState>(set => ({
 
   openMobileSidebar: () => set({ mobileSidebarOpen: true }),
   closeMobileSidebar: () => set({ mobileSidebarOpen: false }),
+
+  openAiPanel: (view) => set({ aiPanel: view, mobileSidebarOpen: false }),
+  closeAiPanel: () => set({ aiPanel: 'closed' }),
 }));

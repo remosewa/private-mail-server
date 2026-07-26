@@ -480,6 +480,20 @@ export class PrivateMailStack extends cdk.Stack {
       actions: ['sns:CreateTopic'],
       resources: [`arn:aws:sns:${this.region}:${this.account}:chase-email-new-*`],
     }));
+    // Video calls: Chime SDK meetings (multi-party SFU). Chime meeting actions
+    // don't support useful resource-level scoping (meeting IDs are random
+    // UUIDs), so grant on * — the Lambda only operates on meetings it tracks
+    // in DynamoDB.
+    apiLambdaRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'AllowChimeMeetings',
+      actions: [
+        'chime:CreateMeeting',
+        'chime:GetMeeting',
+        'chime:DeleteMeeting',
+        'chime:CreateAttendee',
+      ],
+      resources: ['*'],
+    }));
 
     // --- Auth Lambda ---
     // Registration and login: manages user records, returns encrypted private key blob.
@@ -662,6 +676,78 @@ export class PrivateMailStack extends cdk.Stack {
     });
 
     // =========================================================
+    // Lambda — ai-handler (Ask AI)
+    //
+    // Streams Claude (Bedrock) output to the browser via a Function URL in
+    // RESPONSE_STREAM mode — API Gateway HTTP APIs buffer responses and cap
+    // integrations at 30s, so the AI endpoint bypasses the API entirely.
+    // Auth: Cognito access token verified in-function (aws-jwt-verify).
+    // All email data tools execute client-side; this Lambda only proxies
+    // the conversation to Bedrock.
+    // =========================================================
+    const aiLambdaRole = new iam.Role(this, 'AiLambdaRole', {
+      roleName: 'chase-ai-lambda',
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
+      ],
+      description: 'Ask AI Lambda: stream Claude on Bedrock to authenticated clients',
+    });
+    // Bedrock model invocation. The Mantle (Messages-API) endpoint authorizes
+    // under its own service namespace — bedrock-mantle:CreateInference on
+    // arn:aws:bedrock-mantle:{region}:{account}:project/default — while the
+    // classic InvokeModel actions cover the underlying model/inference-profile
+    // path. Resource-level scoping is unreliable across these ARN shapes and
+    // cross-region profiles, and all actions are inference-only, so grant on *.
+    aiLambdaRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'AllowBedrockInvoke',
+      actions: [
+        'bedrock-mantle:CreateInference',
+        'bedrock:InvokeModel',
+        'bedrock:InvokeModelWithResponseStream',
+      ],
+      resources: ['*'],
+    }));
+
+    const aiHandlerFn = new lambdaNode.NodejsFunction(this, 'AiHandler', {
+      functionName: 'chase-ai-handler',
+      description: 'Ask AI: streaming Bedrock (Claude Sonnet 5) proxy with client-side tools',
+      entry: path.join(__dirname, '../lambda/ai-handler/handler.ts'),
+      handler: 'handler',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      role: aiLambdaRole,
+      timeout: cdk.Duration.minutes(3),
+      memorySize: 512,
+      environment: {
+        USER_POOL_ID: userPool.userPoolId,
+        USER_POOL_CLIENT_ID: userPoolClient.userPoolClientId,
+        // Sonnet 4.6 via the us. cross-region inference profile on the classic
+        // bedrock-runtime surface (Sonnet 5 is Mantle-only and blocked on an
+        // account entitlement — see lambda/ai-handler/handler.ts)
+        BEDROCK_MODEL_ID: 'us.anthropic.claude-sonnet-4-6',
+      },
+      bundling: {
+        externalModules: ['@aws-sdk/client-*', '@aws-sdk/util-dynamodb'],
+        minify: true,
+        sourceMap: true,
+        target: 'node22',
+      },
+    });
+
+    const aiFnUrl = aiHandlerFn.addFunctionUrl({
+      authType: lambda.FunctionUrlAuthType.NONE, // Cognito JWT verified in-function
+      invokeMode: lambda.InvokeMode.RESPONSE_STREAM,
+      cors: {
+        allowedOrigins: [`https://${domainName}`, 'http://localhost:5173'],
+        allowedMethods: [lambda.HttpMethod.POST],
+        allowedHeaders: ['authorization', 'content-type'],
+        maxAge: cdk.Duration.days(1),
+      },
+    });
+    // The web client discovers the stream URL via GET /ai/config on the main API
+    apiHandlerFn.addEnvironment('AI_STREAM_URL', aiFnUrl.url);
+
+    // =========================================================
     // Lambda — stream-processor
     //
     // Triggered by DynamoDB Streams on emailsTable (OLD_IMAGE).
@@ -679,6 +765,12 @@ export class PrivateMailStack extends cdk.Stack {
     // Delete objects + list (for attachment prefix cleanup)
     userDataBucket.grantDelete(streamProcessorRole);
     userDataBucket.grantRead(streamProcessorRole); // for ListObjectsV2
+    // End Chime meetings when their CALL# record expires (24h TTL backstop)
+    streamProcessorRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'AllowChimeDeleteMeeting',
+      actions: ['chime:DeleteMeeting'],
+      resources: ['*'],
+    }));
 
     const streamProcessorFn = new lambdaNode.NodejsFunction(this, 'StreamProcessor', {
       functionName: 'chase-stream-processor',
@@ -1052,6 +1144,20 @@ export class PrivateMailStack extends cdk.Stack {
       });
     }
 
+    // Video-call guest routes — public so anyone with the link can join.
+    // The join handler grants MASTER only with a valid hostToken; ending a
+    // call also requires the hostToken.
+    httpApi.addRoutes({
+      path: '/calls/{callId}/join',
+      methods: [apigatewayv2.HttpMethod.GET],
+      integration: apiIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/calls/{callId}',
+      methods: [apigatewayv2.HttpMethod.DELETE],
+      integration: apiIntegration,
+    });
+
     // Protected routes — JWT required; userId resolved from the `sub` claim
     const protectedRoutes: [apigatewayv2.HttpMethod, string][] = [
       [apigatewayv2.HttpMethod.GET, '/auth/key-bundle'],
@@ -1102,6 +1208,9 @@ export class PrivateMailStack extends cdk.Stack {
       [apigatewayv2.HttpMethod.POST, '/admin/invites'],
       [apigatewayv2.HttpMethod.DELETE, '/admin/invites/{inviteCode}'],
       [apigatewayv2.HttpMethod.POST, '/client-logs'],
+      [apigatewayv2.HttpMethod.POST, '/calls'],
+      [apigatewayv2.HttpMethod.POST, '/calls/schedule'],
+      [apigatewayv2.HttpMethod.GET, '/ai/config'],
     ];
     for (const [method, routePath] of protectedRoutes) {
       httpApi.addRoutes({

@@ -168,9 +168,13 @@ function buildMime(
 
   for (const att of attachments) {
     const safe = att.filename.replace(/"/g, '\\"');
+    // Custom/unknown file formats reach us with an empty contentType (the
+    // browser's File.type is '' for unregistered extensions) — an empty MIME
+    // type here produces "Content-Type: ; name=..." which SES rejects.
+    const mimeType = att.contentType?.trim() || 'application/octet-stream';
     parts.push(
       '', `--${outer}`,
-      `Content-Type: ${att.contentType}; name="${safe}"`,
+      `Content-Type: ${mimeType}; name="${safe}"`,
       'Content-Transfer-Encoding: base64',
       `Content-Disposition: attachment; filename="${safe}"`, '',
       att.data.toString('base64'),

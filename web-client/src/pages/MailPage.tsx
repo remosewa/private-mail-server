@@ -3,6 +3,7 @@ import Sidebar from '../components/layout/Sidebar';
 import InboxPane from '../components/inbox/InboxPane';
 import ThreadPane from '../components/thread/ThreadPane';
 import ComposePane from '../components/compose/ComposeModal';
+import AskAiPanel from '../components/ai/AskAiPanel';
 import RecoveryKeySetupModal from '../components/RecoveryKeySetupModal';
 import { useUiStore } from '../store/uiStore';
 import { usePushSubscription } from '../hooks/usePushSubscription';
@@ -10,7 +11,7 @@ import { useEmailBackGesture } from '../hooks/useEmailBackGesture';
 import { useAuthStore } from '../store/authStore';
 
 export default function MailPage() {
-  const { composeOpen, draftContext, selectedEmailUlid, mobileSidebarOpen, closeMobileSidebar } = useUiStore();
+  const { composeOpen, draftContext, selectedEmailUlid, mobileSidebarOpen, closeMobileSidebar, aiPanel } = useUiStore();
   const selectEmail = useUiStore(s => s.selectEmail);
   const { hasRecoveryKey, setHasRecoveryKey, userId } = useAuthStore();
   const [showRecoveryModal, setShowRecoveryModal] = useState(false);
@@ -141,6 +142,9 @@ export default function MailPage() {
 
       {/* Compose — floating popup overlay */}
       {composeOpen && <ComposePane key={draftContext?.ulid ?? 'new'} />}
+
+      {/* Ask AI — right-side drawer (full-screen on mobile) */}
+      {aiPanel !== 'closed' && <AskAiPanel />}
     </div>
     </div>
   );

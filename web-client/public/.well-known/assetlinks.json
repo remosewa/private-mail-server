@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "net.wilsonhq.mail",
+      "sha256_cert_fingerprints": [
+        "B6:26:5D:87:80:66:6C:82:45:AB:5B:5D:98:8B:97:A9:58:96:1C:4E:6D:78:B6:2D:24:85:92:6C:78:CE:A9:6A"
+      ]
+    }
+  }
+]

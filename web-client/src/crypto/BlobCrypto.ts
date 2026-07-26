@@ -238,7 +238,10 @@ export async function exportEmailKeyBase64(key: CryptoKey): Promise<string> {
 export async function unwrapEmailKey(wrappedKeyBase64: string, privateKey: CryptoKey): Promise<CryptoKey> {
   const wrappedBytes = Uint8Array.from(atob(wrappedKeyBase64), c => c.charCodeAt(0));
   const rawKey = await crypto.subtle.decrypt({ name: 'RSA-OAEP' }, privateKey, wrappedBytes);
-  return crypto.subtle.importKey('raw', rawKey, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+  // Extractable: sending an existing draft re-exports this key (exportEmailKeyBase64)
+  // to hand the raw bytes to the server at send time. The raw key is already in
+  // memory here, so extractability adds no extra exposure.
+  return crypto.subtle.importKey('raw', rawKey, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
 }
 
 /**

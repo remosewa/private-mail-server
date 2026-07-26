@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useAuthStore, readSession, writeSession } from './store/authStore';
 import { loadPrivateKey } from './db/KeyStore';
@@ -8,6 +8,9 @@ import LoginPage from './pages/LoginPage';
 import MailPage from './pages/MailPage';
 import SettingsPage from './pages/SettingsPage';
 import AdminPage from './pages/AdminPage';
+
+// Lazy: keeps the Chime SDK (~1 MB) out of the main bundle — only /call/{id} loads it
+const CallPage = lazy(() => import('./pages/CallPage'));
 import { useUiStore } from './store/uiStore';
 import { useIndexStore } from './store/indexStore';
 import { useFolderStore } from './store/folderStore';
@@ -21,6 +24,11 @@ if (import.meta.env.DEV) {
   import('./debug');
 }
 import { loadSettings } from './sync/SettingsManager';
+
+// /call/{callId} is a public page — guests with just the link join without
+// logging in, so it renders outside the auth gate. (No router; path is static
+// for the lifetime of the page.)
+const callPageId = window.location.pathname.match(/^\/call\/([0-9A-Za-z]{1,64})\/?$/)?.[1] ?? null;
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -259,11 +267,16 @@ const { enabled, setProgress } = useIndexStore();
 
   return (
     <QueryClientProvider client={queryClient}>
-      {userId ? (
-        activePage === 'settings' ? <SettingsPage /> :
-          activePage === 'admin' ? <AdminPage /> :
-            <MailPage />
-      ) : <LoginPage />}
+      {callPageId ? (
+        <Suspense fallback={<div className="min-h-screen bg-gray-950" />}>
+          <CallPage callId={callPageId} />
+        </Suspense>
+      ) :
+        userId ? (
+          activePage === 'settings' ? <SettingsPage /> :
+            activePage === 'admin' ? <AdminPage /> :
+              <MailPage />
+        ) : <LoginPage />}
     </QueryClientProvider>
   );
 }

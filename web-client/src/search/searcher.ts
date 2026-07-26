@@ -89,6 +89,33 @@ export async function keywordSearch(
   }
 }
 
+/**
+ * Any-word (OR) keyword search — FTS5 MATCH treats space-separated terms as
+ * AND, which kills recall on natural multi-word queries. This variant quotes
+ * each token and joins with OR, so any matching word qualifies (BM25 still
+ * ranks emails matching more words higher).
+ */
+export async function anyWordSearch(
+  query: string,
+  folderId?: string,
+  limit = 5000,
+): Promise<{ ulid: string; score: number; receivedMs: number }[]> {
+  const words = query
+    .split(/\s+/)
+    .map(w => w.replace(/"/g, '').trim())
+    .filter(w => w.length > 1 || /\d/.test(w));
+  if (words.length === 0) return [];
+  const ftsQuery = words.map(w => `"${w}"`).join(' OR ');
+  try {
+    const rows = await ftsSearch(ftsQuery, folderId, limit);
+    console.log('[anyWordSearch] query:', ftsQuery, '| rows returned:', rows.length);
+    return rows;
+  } catch (err) {
+    console.error('[anyWordSearch] FTS5 query failed:', err, 'ftsQuery:', ftsQuery);
+    return [];
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Semantic search — SQL ANN via sqlite-vec vec0 virtual table
 // ---------------------------------------------------------------------------
@@ -103,33 +130,35 @@ export async function semanticSearch(
   const queryBytes = new Uint8Array(queryEmb.buffer, queryEmb.byteOffset, queryEmb.byteLength);
   const candidates = Math.max(200, limit * 20);
 
-  const rows = await db.selectObjects(
-    `SELECT v.ulid, v.distance, m.receivedMs
-     FROM email_vecs v
-     INNER JOIN email_metadata m ON m.ulid = v.ulid
-     WHERE v.embedding MATCH ?
-     ORDER BY v.distance
-     LIMIT ?`,
+  // vec0 KNN constraints: the row count must be a `k = ?` constraint (a bound
+  // `LIMIT ?` errors), and NO other WHERE/JOIN constraint may touch the vec0
+  // table — SQLite pushes join conditions down as constraints on the aux
+  // `ulid` column, which KNN queries reject ("illegal WHERE constraint ... on
+  // a vec0 auxiliary column"). So: KNN alone first, metadata second.
+  const knnRows = await db.selectObjects(
+    `SELECT ulid, distance FROM email_vecs WHERE embedding MATCH ? AND k = ? ORDER BY distance`,
     [queryBytes, candidates],
   );
+  console.log('[semanticSearch] knn rows returned:', knnRows.length);
+  if (knnRows.length === 0) return [];
 
-  let filtered = rows;
-  if (folderId) {
-    const folderRows = await db.selectObjects(
-      'SELECT ulid FROM email_metadata WHERE folderId = ?',
-      [folderId],
-    );
-    const folderSet = new Set(folderRows.map(r => r['ulid'] as string));
-    filtered = rows.filter(r => folderSet.has(r['ulid'] as string));
-  }
+  const ulids = [...new Set(knnRows.map(r => r['ulid'] as string))];
+  const placeholders = ulids.map(() => '?').join(',');
+  const metaRows = await db.selectObjects(
+    `SELECT ulid, receivedMs, folderId FROM email_metadata WHERE ulid IN (${placeholders})`,
+    ulids,
+  );
+  const meta = new Map(metaRows.map(r => [r['ulid'] as string, r]));
 
   const best = new Map<string, { score: number; receivedMs: number }>();
-  for (const row of filtered) {
+  for (const row of knnRows) {
     const ulid = row['ulid'] as string;
+    const m = meta.get(ulid);
+    if (!m) continue; // vec entry for a deleted email
+    if (folderId && m['folderId'] !== folderId) continue;
     const dist = row['distance'] as number;
-    const receivedMs = row['receivedMs'] as number;
     const current = best.get(ulid);
-    if (!current || current.score > dist) best.set(ulid, { score: dist, receivedMs });
+    if (!current || current.score > dist) best.set(ulid, { score: dist, receivedMs: m['receivedMs'] as number });
   }
 
   return Array.from(best.entries())

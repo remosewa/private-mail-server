@@ -697,6 +697,22 @@ async function applySchema(db: VecDb): Promise<void> {
     try { await db.exec('ALTER TABLE email_metadata ADD COLUMN attachmentFilenames TEXT'); } catch { /* already exists */ }
     await db.exec('PRAGMA user_version = 16');
   }
+
+  if (version < 17) {
+    // Ask AI chat history — device-local only, never synced to the server.
+    // `messages` is the full Anthropic-format conversation JSON (including
+    // tool_use/tool_result/thinking blocks) so a chat can be resumed exactly.
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS ai_chats (
+        chat_id    TEXT PRIMARY KEY,
+        title      TEXT NOT NULL,
+        createdAt  TEXT NOT NULL,
+        updatedAt  TEXT NOT NULL,
+        messages   TEXT NOT NULL
+      )
+    `);
+    await db.exec('PRAGMA user_version = 17');
+  }
 }
 
 async function initDb(): Promise<SqliteDb> {
