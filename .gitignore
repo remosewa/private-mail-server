@@ -1,5 +1,6 @@
 *.js
 !jest.config.js
+!web-client/public/sw.js
 *.d.ts
 node_modules
 

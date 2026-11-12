@@ -30,6 +30,20 @@ export default function MailPage() {
   usePushSubscription();
   useEmailBackGesture();
 
+  // Opened from a notification while the app was closed: the service worker
+  // passes the email as ?email=<ulid>. Strip it from the URL before selecting
+  // so the back-gesture history entry doesn't carry it.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const ulid = params.get('email');
+    if (!ulid) return;
+    params.delete('email');
+    const qs = params.toString();
+    history.replaceState(history.state, '', window.location.pathname + (qs ? `?${qs}` : '') + window.location.hash);
+    window.dispatchEvent(new CustomEvent('inbox-refresh-requested'));
+    selectEmail(ulid);
+  }, [selectEmail]);
+
   // Listen for service worker messages
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
